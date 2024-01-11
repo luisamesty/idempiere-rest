@@ -37,7 +37,7 @@
     <booleanAttribute key="clearConfig" value="true"/>
     <booleanAttribute key="clearws" value="true"/>
     <booleanAttribute key="clearwslog" value="false"/>
-    <stringAttribute key="configLocation" value="${workspace_loc}/.metadata/.plugins/org.eclipse.pde.core/server.product.rest"/>
+    <stringAttribute key="configLocation" value="${workspace_loc}/.metadata/.plugins/org.eclipse.pde.core/server.product_REST_API_TrekGlobal"/>
     <booleanAttribute key="default" value="false"/>
     <setAttribute key="deselected_workspace_bundles"/>
     <booleanAttribute key="includeOptional" value="false"/>
@@ -402,7 +402,6 @@
         <setEntry value="wrapped.org.springframework.spring-context@default:default"/>
         <setEntry value="wrapped.org.springframework.spring-core@default:default"/>
         <setEntry value="wrapped.org.springframework.spring-expression@default:default"/>
-        <setEntry value="wrapped.org.springframework.spring-jcl@default:default"/>
         <setEntry value="wrapped.org.springframework.spring-web@default:default"/>
         <setEntry value="wrapped.wsdl4j.wsdl4j@default:default"/>
         <setEntry value="xstream@default:default"/>
