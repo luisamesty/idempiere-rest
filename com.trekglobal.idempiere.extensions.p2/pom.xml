@@ -36,4 +36,38 @@
 			</plugin>
 		</plugins>
 	</build>
+    <!-- Aquí agregamos los repositorios -->
+    <repositories>
+        <!-- Repositorio central de Maven -->
+        <repository>
+            <id>central</id>
+            <url>https://repo.maven.apache.org/maven2</url>
+        </repository>
+
+        <!-- Repositorio Eclipse P2 para dependencias OSGi -->
+        <repository>
+            <id>eclipse-p2</id>
+            <layout>p2</layout>
+            <url>https://download.eclipse.org/releases/latest</url>
+        </repository>
+
+        <!-- Repositorio P2 de iDempiere -->
+        <repository>
+            <id>idempiere-p2</id>
+            <layout>p2</layout>
+            <url>file:///home/luisamesty/sources/iDempiere12/idempiere/org.idempiere.p2/target/repository</url>
+        </repository>
+    </repositories>		
+	<dependencies>
+	    <dependency>
+	        <groupId>jakarta.ws.rs</groupId>
+	        <artifactId>jakarta.ws.rs-api</artifactId>
+	        <version>2.1.6</version>
+	    </dependency>
+	    <dependency>
+		    <groupId>javax.ws.rs</groupId>
+		    <artifactId>javax.ws.rs-api</artifactId>
+		    <version>2.1.1</version>
+		</dependency>
+	</dependencies>
 </project>
