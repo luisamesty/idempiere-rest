@@ -44,4 +44,11 @@ public class Activator extends Incremental2PackActivator {
 
 		super.start(context);
 	}
+
+	@Override
+	protected void afterPackIn() {
+		super.afterPackIn();
+		context.registerService(Activator.class, this, null);
+	}
+		
 }

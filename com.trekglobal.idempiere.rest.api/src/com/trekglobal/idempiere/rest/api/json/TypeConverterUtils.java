@@ -27,13 +27,15 @@ package com.trekglobal.idempiere.rest.api.json;
 
 import static org.compiere.util.DisplayType.Account;
 import static org.compiere.util.DisplayType.Binary;
+import static org.compiere.util.DisplayType.Button;
+import static org.compiere.util.DisplayType.ID;
 import static org.compiere.util.DisplayType.Image;
 import static org.compiere.util.DisplayType.Location;
 import static org.compiere.util.DisplayType.Locator;
 import static org.compiere.util.DisplayType.PAttribute;
 import static org.compiere.util.DisplayType.Payment;
-import static org.compiere.util.DisplayType.Button;
 import static org.compiere.util.DisplayType.RecordID;
+import static org.compiere.util.DisplayType.JSON;
 
 import java.text.Normalizer;
 import java.text.Normalizer.Form;
@@ -50,6 +52,7 @@ import org.compiere.util.DisplayType;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonNull;
 import com.google.gson.JsonPrimitive;
+import com.trekglobal.idempiere.rest.api.model.MRestView;
 
 /**
  * @author hengsin
@@ -80,18 +83,29 @@ public class TypeConverterUtils {
 		return propertyName;
 	}
 	
-	@SuppressWarnings({ "rawtypes", "unchecked" })
 	/**
 	 * Convert db column value to json value
 	 * @param column
 	 * @param value
 	 * @return Object
 	 */
-	public static Object toJsonValue(MColumn column, Object value) {		
+	public static Object toJsonValue(MColumn column, Object value) {
+		return toJsonValue(column, value, null);
+	}
+	
+	@SuppressWarnings({ "rawtypes", "unchecked" })
+	/**
+	 * Convert db column value to json value
+	 * @param column
+	 * @param value
+	 * @param referenceView
+	 * @return Object
+	 */
+	public static Object toJsonValue(MColumn column, Object value, MRestView referenceView) {		
 		ITypeConverter typeConverter = getTypeConverter(column.getAD_Reference_ID(), value);
 		
 		if (typeConverter != null) {
-			return typeConverter.toJsonValue(column, value);
+			return typeConverter.toJsonValue(column, value, referenceView);
 		} else if (value != null && DisplayType.isText(column.getAD_Reference_ID())) {
 			return value.toString();
 		} else if (value != null && column.getAD_Reference_ID() == DisplayType.ID && value instanceof Number) {
@@ -122,18 +136,29 @@ public class TypeConverterUtils {
 		}
 	}
 	
-	@SuppressWarnings("rawtypes")
 	/**
 	 * Convert json value to db column value
 	 * @param column
 	 * @param value
 	 * @return Object
 	 */
-	public static Object fromJsonValue(MColumn column, JsonElement value) {		
+	public static Object fromJsonValue(MColumn column, JsonElement value) {
+		return fromJsonValue(column, value, null);
+	}
+	
+	@SuppressWarnings("rawtypes")
+	/**
+	 * Convert json value to db column value
+	 * @param column
+	 * @param value
+	 * @param referenceView
+	 * @return Object
+	 */
+	public static Object fromJsonValue(MColumn column, JsonElement value, MRestView referenceView) {		
 		ITypeConverter typeConverter = getTypeConverter(column.getAD_Reference_ID(), value);
 		
 		if (typeConverter != null) {
-			return typeConverter.fromJsonValue(column, value);
+			return typeConverter.fromJsonValue(column, value, referenceView);
 		} else if (value != null && !(value instanceof JsonNull) && DisplayType.isText(column.getAD_Reference_ID())) {
 			return value.getAsString();
 		} else {
@@ -179,14 +204,15 @@ public class TypeConverterUtils {
 		query.put("displayType", Integer.toString(displayType));
 		typeConverter = Service.locator().locate(ITypeConverter.class, query).getService();
 		if (typeConverter == null) {
-			if (((DisplayType.isNumeric(displayType) || displayType == Button || displayType == RecordID) && value instanceof Number)) {
+			if (((DisplayType.isNumeric(displayType) || displayType == Button || displayType == RecordID || displayType == ID) && value instanceof Number)) {
 				typeConverter = new NumericTypeConverter();
 			} else if (DisplayType.isDate(displayType) && value instanceof Date) {
 				typeConverter = new DateTypeConverter();
 			} else if (DisplayType.YesNo == displayType) {
 				typeConverter = new YesNoTypeConverter();
-			} else if (displayType == Location
-					|| displayType == Locator
+			}else if(displayType==Location){
+				return new LocationTypeConverter();
+			} else if (displayType == Locator
 					|| displayType == Account
 					|| displayType == PAttribute
 					|| displayType == Payment
@@ -196,6 +222,8 @@ public class TypeConverterUtils {
 				return new BinaryTypeConverter();
 			} else if (displayType == Image) {
 				return new ImageTypeConverter();		
+			} else if (displayType == JSON) {
+				return new JSONTypeConverter();		
 			}
 		}
 		return typeConverter;
@@ -208,14 +236,15 @@ public class TypeConverterUtils {
 		query.put("displayType", Integer.toString(displayType));
 		typeConverter = Service.locator().locate(ITypeConverter.class, query).getService();
 		if (typeConverter == null) {
-			if ((DisplayType.isNumeric(displayType) || displayType == Button || displayType == RecordID) && (isNumber(value) || isString(value))) {
+			if ((DisplayType.isNumeric(displayType) || displayType == Button || displayType == RecordID || displayType == ID) && (isNumber(value) || isString(value))) {
 				typeConverter = new NumericTypeConverter();
 			} else if (DisplayType.isDate(displayType) && isString(value)) {
 				typeConverter = new DateTypeConverter();
 			} else if (DisplayType.YesNo == displayType && (isBoolean(value) || isString(value))) {
 				typeConverter = new YesNoTypeConverter();
-			} else if (displayType == Location
-					|| displayType == Locator
+			}else if(displayType==Location){
+				return new LocationTypeConverter();
+			}else if (displayType == Locator
 					|| displayType == Account
 					|| displayType == PAttribute
 					|| displayType == Payment
@@ -226,6 +255,8 @@ public class TypeConverterUtils {
 			}
 			else if (displayType == Image) {
 				return new ImageTypeConverter();
+			} else if (displayType == JSON) {
+				return new JSONTypeConverter();		
 			}
 		}
 		return typeConverter;

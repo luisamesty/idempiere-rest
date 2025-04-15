@@ -31,6 +31,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -47,6 +48,7 @@ import org.adempiere.base.event.EventManager;
 import org.adempiere.base.event.EventProperty;
 import org.adempiere.base.event.IEventManager;
 import org.adempiere.exceptions.AdempiereException;
+import org.adempiere.exceptions.CrossTenantException;
 import org.compiere.model.MAttachment;
 import org.compiere.model.MAttachmentEntry;
 import org.compiere.model.MTable;
@@ -58,6 +60,7 @@ import org.compiere.process.ProcessInfo;
 import org.compiere.util.CLogger;
 import org.compiere.util.DB;
 import org.compiere.util.Env;
+import org.compiere.util.MimeType;
 import org.compiere.util.Msg;
 import org.compiere.util.Trx;
 import org.compiere.util.Util;
@@ -69,6 +72,7 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.trekglobal.idempiere.rest.api.json.IDempiereRestException;
 import com.trekglobal.idempiere.rest.api.json.IPOSerializer;
 import com.trekglobal.idempiere.rest.api.json.ModelHelper;
 import com.trekglobal.idempiere.rest.api.json.POParser;
@@ -79,6 +83,8 @@ import com.trekglobal.idempiere.rest.api.json.expand.ExpandParser;
 import com.trekglobal.idempiere.rest.api.json.expand.ExpandUtils;
 import com.trekglobal.idempiere.rest.api.json.filter.ConvertedQuery;
 import com.trekglobal.idempiere.rest.api.json.filter.IQueryConverter;
+import com.trekglobal.idempiere.rest.api.model.MRestView;
+import com.trekglobal.idempiere.rest.api.model.MRestViewRelated;
 import com.trekglobal.idempiere.rest.api.v1.resource.ModelResource;
 import com.trekglobal.idempiere.rest.api.v1.resource.WindowResource;
 import com.trekglobal.idempiere.rest.api.v1.resource.file.FileStreamingOutput;
@@ -94,12 +100,22 @@ public class ModelResourceImpl implements ModelResource {
 	public static final String PO_BEFORE_REST_SAVE = "idempiere-rest/po/beforeSave";
 	public static final String PO_AFTER_REST_SAVE = "idempiere-rest/po/afterSave";
 
+	private boolean useRestView = false;
+	
 	/**
 	 * default constructor
 	 */
 	public ModelResourceImpl() {
 	}
 
+	/**
+	 * Use Rest_View as entry point 
+	 */
+	protected ModelResourceImpl restView() {
+		useRestView = true;
+		return this;
+	}
+	
 	@Override
 	public Response getPO(String tableName, String id, String details, String select, String showsql) {
 		return getPO(tableName, id, details, select, null, showsql);
@@ -107,7 +123,7 @@ public class ModelResourceImpl implements ModelResource {
 	
 	/**
 	 * 
-	 * @param tableName
+	 * @param tableName table or rest view definition name
 	 * @param id id or uuid
 	 * @param details child/link entity
 	 * @param multiProperty comma separated columns
@@ -116,45 +132,121 @@ public class ModelResourceImpl implements ModelResource {
 	 */
 	private Response getPO(String tableName, String id, String details, String multiProperty, String singleProperty, String showsql) {
 		try {
+			MRestView view = null;
+			if (useRestView)  {
+				view = RestUtils.getView(tableName);
+				if (view != null)
+					tableName = MTable.getTableName(Env.getCtx(), view.getAD_Table_ID());
+				else
+					throw new IDempiereRestException("Invalid rest view name", "No match found for rest view name: " + tableName, Status.NOT_FOUND);
+			}
+			
+			RestUtils.getTableAndCheckAccess(tableName, false);
+
+			String[] includes = null;
+			if (!Util.isEmpty(multiProperty, true)) {
+				if (view != null)
+					multiProperty = toColumnNames(view, multiProperty);
+				includes = RestUtils.getSelectedColumns(tableName, multiProperty);
+			} else if (!Util.isEmpty(singleProperty, true)) {
+				if (view != null) {
+					String original = singleProperty;
+					singleProperty = toColumnNames(view, singleProperty);
+					if (Util.isEmpty(singleProperty, true))
+						return ResponseUtils.getResponseError(Status.NOT_FOUND, "Invalid property name", "No match found for table name: ", original);
+				}
+				MTable table = MTable.get(Env.getCtx(), tableName);
+				if (table.getColumnIndex(singleProperty) < 0) {
+					return ResponseUtils.getResponseError(Status.NOT_FOUND, "Invalid property name", "No match found for column name: ", singleProperty);
+				}
+				includes = new String[] {singleProperty};
+			}
+
 			Query query = RestUtils.getQuery(tableName, id, true, false);
+			if (includes != null && includes.length > 0)
+				query.selectColumns(includes);
 			PO po = query.first();
 
 			POParser poParser = new POParser(tableName, id, po);
 			if (poParser.isValidPO()) {
 				IPOSerializer serializer = IPOSerializer.getPOSerializer(tableName, po.getClass());
-				String[] includes = null;
-				if (!Util.isEmpty(multiProperty, true)) {
-					includes = RestUtils.getSelectedColumns(tableName, multiProperty);
-				} else if (!Util.isEmpty(singleProperty, true)) {
-					if (po.get_Value(singleProperty) == null) {
-						return ResponseUtils.getResponseError(Status.NOT_FOUND, "Invalid property name", "No match found for table name: ", singleProperty);
-					}
-					includes = new String[] {singleProperty};
-				}
-				JsonObject json;
+				JsonObject json;				
 				boolean showData = (showsql == null || !"nodata".equals(showsql));
 				if (showData)
-					json = serializer.toJson(po, includes, null);
+					json = serializer.toJson(po, view, includes, null);
 				else
 					json = new JsonObject();
 
 				if (showsql != null) {
 					json.addProperty("sql-command", DB.getDatabase().convertStatement(query.getSQL()));
 				}
-				if (!Util.isEmpty(details, true))
-					expandDetailsInJsonObject(po, json, json, details, showsql != null, showData);
+				if (!Util.isEmpty(details, true)) {
+					expandDetailsInJsonObject(po, view, json, json, details, showsql != null, showData);
+				} else if (view != null) {
+					//add auto expand detail view definition
+					MRestViewRelated[] relateds = view.getRelatedViews();
+					if (relateds != null && relateds.length > 0) {
+						StringBuilder expands = new StringBuilder();
+						for (MRestViewRelated related : relateds) {
+							if (related.isRestAutoExpand()) {
+								if (expands.length() > 0)
+									expands.append(",");
+								autoExpandRelated(expands, related);
+							}
+						}
+						if (expands.length() > 0) {
+							expandDetailsInJsonObject(po, view, json, json, expands.toString(), showsql != null, showData);
+						}
+					}
+				}
 
 				return Response.ok(json.toString()).build();
 			} else {
 				return poParser.getResponseError();
 			}
 		} catch(Exception ex) {
-			return ResponseUtils.getResponseErrorFromException(ex, "GET Error", "Get PO with exception: ");
+			return ResponseUtils.getResponseErrorFromException(ex, "GET Error");
+		}
+	}
+
+	private void autoExpandRelated(StringBuilder expands, MRestViewRelated related) {
+		expands.append(related.getName());		
+		MRestView view = MRestView.get(related.getREST_RelatedRestView_ID());
+		//check tree, avoid infinite loop
+		if (view.getREST_View_ID() == related.getREST_View_ID())
+			return;
+		MRestViewRelated[] relateds = view.getRelatedViews();
+		if (relateds != null && relateds.length > 0) {
+			StringBuilder childs = new StringBuilder();
+			for (MRestViewRelated rv : relateds) {
+				if (rv.isRestAutoExpand()) {
+					if (childs.length() > 0)
+						childs.append(",");
+					autoExpandRelated(childs, rv);
+				}
+			}
+			if (childs.length() > 0) {
+				expands.append("($expand=")
+					.append(childs.toString())
+					.append(")");
+			}
 		}
 	}
 	
-	private void expandDetailsInJsonObject(PO po, JsonObject masterJsonObject, JsonObject detailJsonObject, String expandParameter, boolean showSql, boolean showData) {
-		ExpandParser expandParser = new ExpandParser(po, expandParameter);
+	/**
+	 * Convert view property name to table column name (if needed)
+	 * @param view
+	 * @param propertyNames comma separated list of view property or table column name
+	 * @return converted names
+	 */
+	private String toColumnNames(MRestView view, String propertyNames) {
+		String[] columns = propertyNames.split("[,]");
+		columns = view.toColumnNames(columns, true);
+		return String.join(",", columns);
+	}
+
+	private void expandDetailsInJsonObject(PO po, MRestView view, JsonObject masterJsonObject, JsonObject detailJsonObject, String expandParameter, boolean showSql, boolean showData) {
+		ExpandParser expandParser = new ExpandParser(po, view, expandParameter);
 		if (showSql)
 			ExpandUtils.addDetailSQLCommandToJson(expandParser.getTableNameSQLStatementMap(), masterJsonObject);
 		
@@ -200,7 +292,7 @@ public class ModelResourceImpl implements ModelResource {
 			json.add("models", array);
 			return Response.ok(json.toString()).build();			
 		} catch (Exception ex) {
-			return ResponseUtils.getResponseErrorFromException(ex, "GET Error", "Get models with exception: ");
+			return ResponseUtils.getResponseErrorFromException(ex, "GET Error");
 		}
 
 	}
@@ -209,13 +301,29 @@ public class ModelResourceImpl implements ModelResource {
 	public Response getPOs(String tableName, String details, String filter, String order, String select, int top, int skip,
 			String validationRuleID, String context, String showsql) {
 		try {
+			MRestView view = null;
+			if (useRestView) {
+				view = RestUtils.getView(tableName);
+				if (view != null)
+					tableName = MTable.getTableName(Env.getCtx(), view.getAD_Table_ID());
+				else
+					throw new IDempiereRestException("Invalid rest view name", "No match found for rest view name: " + tableName, Status.NOT_FOUND);
+			}
+			
+			RestUtils.getTableAndCheckAccess(tableName, false);
 			ModelHelper modelHelper = new ModelHelper(tableName, filter, order, top, skip, validationRuleID, context);
-			List<PO> list = modelHelper.getPOsFromRequest();
+			if (view != null && !Util.isEmpty(select, true)) {
+				select = toColumnNames(view, select);
+			}
+			String[] includes = RestUtils.getSelectedColumns(tableName, select);
+			if (view != null) {
+				modelHelper.setView(view);
+			}
+			List<PO> list = modelHelper.getPOsFromRequest(includes);
 			
 			JsonArray array = new JsonArray();
 			if (list != null) {
 				IPOSerializer serializer = IPOSerializer.getPOSerializer(tableName, MTable.getClass(tableName));
-				String[] includes = RestUtils.getSelectedColumns(tableName, select);
 
 				boolean showData = (showsql == null || !"nodata".equals(showsql));
 				JsonObject json = new JsonObject();
@@ -229,9 +337,26 @@ public class ModelResourceImpl implements ModelResource {
 				}
 				
 				for (PO po : list) {
-					JsonObject detailJson = serializer.toJson(po, includes, null);
-					if (!Util.isEmpty(details, true))
-						expandDetailsInJsonObject(po, json, detailJson, details, showsql != null, showData);
+					JsonObject detailJson = serializer.toJson(po, view, includes, null);
+					if (!Util.isEmpty(details, true)) {
+						expandDetailsInJsonObject(po, view, json, detailJson, details, showsql != null, showData);
+					} else if (view != null) {
+						//add auto expand detail view definition
+						MRestViewRelated[] relateds = view.getRelatedViews();
+						if (relateds != null && relateds.length > 0) {
+							StringBuilder expands = new StringBuilder();
+							for (MRestViewRelated related : relateds) {
+								if (related.isRestAutoExpand()) {
+									if (expands.length() > 0)
+										expands.append(",");
+									autoExpandRelated(expands, related);
+								}
+							}
+							if (expands.length() > 0) {
+								expandDetailsInJsonObject(po, view, json, detailJson, expands.toString(), showsql != null, showData);
+							}
+						}
+					}
 					array.add(detailJson);
 				}
 				
@@ -251,7 +376,7 @@ public class ModelResourceImpl implements ModelResource {
 				return Response.ok(json.toString()).build();
 			}
 		} catch (Exception ex) {
-			return ResponseUtils.getResponseErrorFromException(ex, "GET Error", "Get POs with exception: ");
+			return ResponseUtils.getResponseErrorFromException(ex, "GET Error");
 		}
 	}
 	
@@ -259,30 +384,43 @@ public class ModelResourceImpl implements ModelResource {
 	public Response create(String tableName, String jsonText) {
 		Trx trx = Trx.get(Trx.createTrxName(), true);
 		try {
+			MRestView view = null;
+			if (useRestView) {
+				view = RestUtils.getView(tableName);
+				if (view != null)
+					tableName = MTable.getTableName(Env.getCtx(), view.getAD_Table_ID());
+				else
+					throw new IDempiereRestException("Invalid rest view name", "No match found for rest view name: " + tableName, Status.NOT_FOUND);
+			}
+			
 			MTable table = RestUtils.getTableAndCheckAccess(tableName, true);
 
 			trx.start();
 			Gson gson = new GsonBuilder().create();
 			JsonObject jsonObject = gson.fromJson(jsonText, JsonObject.class);
 			IPOSerializer serializer = IPOSerializer.getPOSerializer(tableName, MTable.getClass(tableName));
-			PO po = serializer.fromJson(jsonObject, table);
+			PO po = serializer.fromJson(jsonObject, table, view);
+			if (!RestUtils.hasRoleUpdateAccess(po.getAD_Client_ID(), po.getAD_Org_ID(), po.get_Table_ID(), 0, true))
+				return ResponseUtils.getResponseError(Status.FORBIDDEN, "Update error", "Role does not have access","");
+
 			po.set_TrxName(trx.getTrxName());
 			fireRestSaveEvent(po, PO_BEFORE_REST_SAVE, true);
 			try {
-				if (! po.validForeignKeys()) {
-					String msg = CLogger.retrieveErrorString("Foreign key validation error");
-					throw new AdempiereException(msg);
-				}
+				po.validForeignKeysEx();
 				po.saveEx();
 				fireRestSaveEvent(po, PO_AFTER_REST_SAVE, true);
+			} catch (CrossTenantException e) {
+				trx.rollback();
+				return ResponseUtils.getResponseError(Status.INTERNAL_SERVER_ERROR, "Save error", 
+						"Foreign ID " + e.getFKValue() + " not found in ", String.valueOf(e.getFKColumn()));
 			} catch (Exception ex) {
 				trx.rollback();
-				return ResponseUtils.getResponseErrorFromException(ex, "Save error", "Save error with exception: ");
+				return ResponseUtils.getResponseErrorFromException(ex, "Save error");
 			}
 			Map<String, JsonArray> detailMap = new LinkedHashMap<>();
 			Set<String> fields = jsonObject.keySet();
 			for(String field : fields) {
-				String strError = createChild(field, jsonObject, po, detailMap, trx);
+				String strError = createChild(field, jsonObject, po, view, detailMap, trx);
 				if(strError != null)
 					return ResponseUtils.getResponseError(Status.INTERNAL_SERVER_ERROR, "Save error", "Save error with exception: ", strError);
 			}
@@ -291,11 +429,12 @@ public class ModelResourceImpl implements ModelResource {
 			String processError = runDocAction(po, jsonObject, processMsg);
 			if (!Util.isEmpty(processError, true)) {
 				trx.rollback();
-				return ResponseUtils.getResponseError(Status.INTERNAL_SERVER_ERROR, "Can't perform document action", "Encounter exception during execution of document action: ", processError);
+				log.warning("Encounter exception during execution of document action in REST: " + processError);
+				return ResponseUtils.getResponseError(Status.INTERNAL_SERVER_ERROR, Msg.getMsg(po.getCtx(), "FailedProcessingDocument"), processError, "");
 			}
 			trx.commit(true);
 			po.load(trx.getTrxName());
-			jsonObject = serializer.toJson(po);
+			jsonObject = serializer.toJson(po, view);
 			if (processMsg.length() > 0)
 				jsonObject.addProperty("doc-processmsg", processMsg.toString());
 			if (detailMap.size() > 0) {
@@ -307,7 +446,7 @@ public class ModelResourceImpl implements ModelResource {
 			return Response.status(Status.CREATED).entity(jsonObject.toString()).build();
 		} catch (Exception ex) {
 			trx.rollback();
-			return ResponseUtils.getResponseErrorFromException(ex, "Server error", "Server error with exception: ");
+			return ResponseUtils.getResponseErrorFromException(ex, "Server error");
 		} finally {
 			trx.close();
 		}
@@ -318,45 +457,71 @@ public class ModelResourceImpl implements ModelResource {
 	 * @param field
 	 * @param jsonObject
 	 * @param po
+	 * @param view 
 	 * @param detailMap
 	 * @param trx
 	 * @return
 	 */
-	private String createChild(String field, JsonObject jsonObject, PO po, Map<String, JsonArray> detailMap, Trx trx) {
+	private String createChild(String field, JsonObject jsonObject, PO po, MRestView view, Map<String, JsonArray> detailMap, Trx trx) {
 		JsonElement fieldElement = jsonObject.get(field);
 		if (fieldElement != null && fieldElement.isJsonArray()) {
-			MTable childTable = MTable.get(Env.getCtx(), field);
+			String childTableName = field;
+			MRestView childView = null;
+			if (view != null) {
+				//find child view definition
+				MRestViewRelated[] relateds = view.getRelatedViews();
+				for(MRestViewRelated related : relateds) {
+					MRestView relatedView = new MRestView(Env.getCtx(), related.getREST_RelatedRestView_ID(), null);
+					String tableName = MTable.getTableName(Env.getCtx(), relatedView.getAD_Table_ID());
+					if (related.getName().equals(field)) {						
+						childTableName = tableName;
+						childView = relatedView;
+						break;
+					} else if (tableName.equals(field)) {
+						childView = relatedView;
+						break;
+					}
+				}
+				if (childView == null)
+					return null;
+			}
+			MTable childTable = MTable.get(Env.getCtx(), childTableName);
+			if (!RestUtils.isValidDetailTable(childTable, RestUtils.getKeyColumnName(po.get_TableName()))) {
+				throw new IDempiereRestException("Wrong detail", "Cannot create detail records for the table because it has no column that links to the parent table: " + childTableName, Status.INTERNAL_SERVER_ERROR);
+			}
+
 			if (childTable != null && childTable.getAD_Table_ID() > 0) {
-				IPOSerializer childSerializer = IPOSerializer.getPOSerializer(field, MTable.getClass(field));
+				IPOSerializer childSerializer = IPOSerializer.getPOSerializer(childTableName, MTable.getClass(childTableName));
 				JsonArray fieldArray = fieldElement.getAsJsonArray();
 				JsonArray savedArray = new JsonArray();
 				try {
+					MRestView finalChildView = childView;
 					fieldArray.forEach(e -> {
 						if (e.isJsonObject()) {
 							JsonObject childJsonObject = e.getAsJsonObject();
-							PO childPO = childSerializer.fromJson(childJsonObject, childTable);
+							PO childPO = childSerializer.fromJson(childJsonObject, childTable, finalChildView);
+							if (!RestUtils.hasRoleUpdateAccess(childPO.getAD_Client_ID(), childPO.getAD_Org_ID(), childPO.get_Table_ID(), 0, true))
+								throw new AdempiereException("AccessCannotUpdate");
+							
 							childPO.set_TrxName(trx.getTrxName());
 							childPO.set_ValueOfColumn(RestUtils.getKeyColumnName(po.get_TableName()), po.get_ID());
 							fireRestSaveEvent(childPO, PO_BEFORE_REST_SAVE, true);
-						if (! childPO.validForeignKeys()) {
-								String msg = CLogger.retrieveErrorString("Foreign key validation error");
-								throw new AdempiereException(msg);
-							}
+							childPO.validForeignKeysEx();
 							childPO.saveEx();
 							fireRestSaveEvent(childPO, PO_AFTER_REST_SAVE, true);
-							childJsonObject = childSerializer.toJson(childPO);
+							childJsonObject = childSerializer.toJson(childPO, finalChildView);
 							JsonObject newChildJsonObject = e.getAsJsonObject();
 							Map<String, JsonArray> childDetailMap = new LinkedHashMap<>();
 							Set<String> fields = newChildJsonObject.keySet();
 							for(String childField : fields) {
-								String strError = createChild(childField, newChildJsonObject, childPO, childDetailMap, trx);
+								String strError = createChild(childField, newChildJsonObject, childPO, finalChildView, childDetailMap, trx);
 								if(strError != null)
 									throw new AdempiereException(strError);
 							}
 							if (childDetailMap.size() > 0) {
-								for(String childTableName : childDetailMap.keySet()) {
-									JsonArray childArray = childDetailMap.get(childTableName);
-									childJsonObject.add(childTableName, childArray);
+								for(String tableName : childDetailMap.keySet()) {
+									JsonArray childArray = childDetailMap.get(tableName);
+									childJsonObject.add(tableName, childArray);
 								}
 							}
 							savedArray.add(childJsonObject);
@@ -371,6 +536,10 @@ public class ModelResourceImpl implements ModelResource {
 				} catch (Exception ex) {
 					trx.rollback();
 					log.log(Level.SEVERE, ex.getMessage(), ex);
+					
+					if (ex instanceof CrossTenantException) 
+						return "Foreign ID " + ((CrossTenantException)ex).getFKValue() + " not found in " + String.valueOf(((CrossTenantException)ex).getFKColumn());
+
 					return ex.getMessage();
 				}
 			}
@@ -379,14 +548,26 @@ public class ModelResourceImpl implements ModelResource {
 	}
 
 	@Override
-	public Response update(String tableName, String id, String jsonText) {
-
+	public Response update(String name, String id, String jsonText) {
+		MRestView view = null;
+		if (useRestView) {
+			view = RestUtils.getView(name);
+			if (view != null)
+				name = MTable.getTableName(Env.getCtx(), view.getAD_Table_ID());
+			else
+				return ResponseUtils.getResponseErrorFromException(new IDempiereRestException("Invalid rest view name", "No match found for rest view name: " + name, Status.NOT_FOUND), "Not found");
+		}
+		
+		String tableName = name;
 		POParser poParser = new POParser(tableName, id, true, true);
 		if (!poParser.isValidPO()) {
 			return poParser.getResponseError();
 		}
 		
 		PO po = poParser.getPO();
+		if (!RestUtils.hasRoleUpdateAccess(po.getAD_Client_ID(), po.getAD_Org_ID(), po.get_Table_ID(), po.get_ID(), false))
+			return ResponseUtils.getResponseError(Status.FORBIDDEN, "Update error", "Role does not have access","");
+
 		Trx trx = Trx.get(Trx.createTrxName(), true);
 		try {
 
@@ -394,19 +575,20 @@ public class ModelResourceImpl implements ModelResource {
 			Gson gson = new GsonBuilder().create();
 			JsonObject jsonObject = gson.fromJson(jsonText, JsonObject.class);
 			IPOSerializer serializer = IPOSerializer.getPOSerializer(tableName, MTable.getClass(tableName));
-			po = serializer.fromJson(jsonObject, po);
+			po = serializer.fromJson(jsonObject, po, view);
 			po.set_TrxName(trx.getTrxName());
 			fireRestSaveEvent(po, PO_BEFORE_REST_SAVE, false);
 			try {
-				if (! po.validForeignKeys()) {
-					String msg = CLogger.retrieveErrorString("Foreign key validation error");
-					throw new AdempiereException(msg);
-				}
+				po.validForeignKeysEx();
 				po.saveEx();
 				fireRestSaveEvent(po, PO_AFTER_REST_SAVE, false);
-			} catch (Exception ex) {
+			} catch (CrossTenantException e) {
 				trx.rollback();
-				return ResponseUtils.getResponseErrorFromException(ex, "Save error", "Save error with exception: ");
+				return ResponseUtils.getResponseError(Status.INTERNAL_SERVER_ERROR, "Save error", 
+						"Foreign ID " + e.getFKValue() + " not found in ", String.valueOf(e.getFKColumn()));
+			}  catch (Exception ex) {
+				trx.rollback();
+				return ResponseUtils.getResponseErrorFromException(ex, "Save error");
 			}
 			
 			Map<String, JsonArray> detailMap = new LinkedHashMap<>();
@@ -414,41 +596,75 @@ public class ModelResourceImpl implements ModelResource {
 			final int parentId = po.get_ID();
 			for(String field : fields) {
 				JsonElement fieldElement = jsonObject.get(field);
-				if (fieldElement != null && fieldElement.isJsonArray()) {
-					MTable childTable = MTable.get(Env.getCtx(), field);
+				if (fieldElement != null && fieldElement.isJsonArray()) {					
+					MRestView childView = null;
+					if (view != null) {
+						//find child view definition
+						MRestViewRelated[] relateds = view.getRelatedViews();
+						for(MRestViewRelated related : relateds) {
+							MRestView relatedView = new MRestView(Env.getCtx(), related.getREST_RelatedRestView_ID(), null);
+							String tName = MTable.getTableName(Env.getCtx(), relatedView.getAD_Table_ID());
+							if (related.getName().equals(field)) {						
+								childView = relatedView;
+								break;
+							} else if (tName.equals(field)) {
+								childView = relatedView;
+								break;
+							}
+						}
+						if (childView == null)
+							continue;
+					}
+					String childTableName = childView != null ? MTable.getTableName(Env.getCtx(), childView.getAD_Table_ID()) : field;
+					MTable childTable = MTable.get(Env.getCtx(), childTableName);
+					if (!RestUtils.isValidDetailTable(childTable, RestUtils.getKeyColumnName(po.get_TableName()))) {
+						throw new IDempiereRestException("Wrong detail", "Cannot create/update detail records for the table because it has no column that links to the parent table: " + childTableName, Status.INTERNAL_SERVER_ERROR);
+					}
+
 					if (childTable != null && childTable.getAD_Table_ID() > 0) {									
-						IPOSerializer childSerializer = IPOSerializer.getPOSerializer(field, MTable.getClass(field));
+						IPOSerializer childSerializer = IPOSerializer.getPOSerializer(childTableName, MTable.getClass(childTableName));
 						JsonArray fieldArray = fieldElement.getAsJsonArray();
 						JsonArray savedArray = new JsonArray();
+						MRestView finalChildView = childView;
 						try {
 							fieldArray.forEach(e -> {
 								if (e.isJsonObject()) {
 									JsonObject childJsonObject = e.getAsJsonObject();
-									PO childPO = loadPO(field, childJsonObject);
+									PO childPO = loadPO(childTableName, childJsonObject);
+									boolean delete = childJsonObject.get("(delete)") != null
+											&& childJsonObject.get("(delete)").getAsBoolean();
+									if (delete && childPO == null)
+										throw new IDempiereRestException("Delete Error", "Cannot delete non-existing record", Status.NOT_FOUND);
 									
 									if (childPO == null) {
-										childPO = childSerializer.fromJson(childJsonObject, childTable);
+										childPO = childSerializer.fromJson(childJsonObject, childTable, finalChildView);
 										childPO.set_ValueOfColumn(RestUtils.getKeyColumnName(tableName), parentId);
-									} else {
-										childPO = childSerializer.fromJson(childJsonObject, childPO);
+									} else  if (!delete){
+										childPO = childSerializer.fromJson(childJsonObject, childPO, finalChildView);
 									}
 									childPO.set_TrxName(trx.getTrxName());
-									fireRestSaveEvent(childPO, PO_BEFORE_REST_SAVE, false);
-									if (! childPO.validForeignKeys()) {
-										String msg = CLogger.retrieveErrorString("Foreign key validation error");
-										throw new AdempiereException(msg);
-									}
-									childPO.saveEx();
-									fireRestSaveEvent(childPO, PO_AFTER_REST_SAVE, false);
-									childJsonObject = serializer.toJson(childPO);
-									savedArray.add(childJsonObject);
+									if (delete) {
+										childPO.deleteEx(true);
+									} else {
+										fireRestSaveEvent(childPO, PO_BEFORE_REST_SAVE, false);
+										childPO.validForeignKeysEx();
+										childPO.saveEx();
+										fireRestSaveEvent(childPO, PO_AFTER_REST_SAVE, false);
+										childJsonObject = serializer.toJson(childPO, finalChildView);
+										savedArray.add(childJsonObject);
+									}									
 								}
 							});
 							if (savedArray.size() > 0)
 								detailMap.put(field, savedArray);
 						} catch (Exception ex) {
 							trx.rollback();
-							return ResponseUtils.getResponseErrorFromException(ex, "Save error", "Save error with exception: ");
+							
+							if (ex instanceof CrossTenantException) 
+								return ResponseUtils.getResponseError(Status.INTERNAL_SERVER_ERROR, "Save Error", 
+										"Foreign ID " + ((CrossTenantException)ex).getFKValue() + " not found in ", String.valueOf(((CrossTenantException)ex).getFKColumn()));
+
+							return ResponseUtils.getResponseErrorFromException(ex, "Save error");
 						}
 					}
 				}
@@ -460,11 +676,12 @@ public class ModelResourceImpl implements ModelResource {
 				trx.commit(true);
 			} else {
 				trx.rollback();
-				return ResponseUtils.getResponseError(Status.INTERNAL_SERVER_ERROR, "Can't perform document action", "Encounter exception during execution of document action: ", error);
+				log.warning("Encounter exception during execution of document action in REST: " + error);
+				return ResponseUtils.getResponseError(Status.INTERNAL_SERVER_ERROR, Msg.getMsg(po.getCtx(), "FailedProcessingDocument"), error, "");
 			}
 			
 			po.load(trx.getTrxName());
-			jsonObject = serializer.toJson(po);
+			jsonObject = serializer.toJson(po, view);
 			if (processMsg.length() > 0)
 				jsonObject.addProperty("doc-processmsg", processMsg.toString());
 			if (detailMap.size() > 0) {
@@ -476,7 +693,7 @@ public class ModelResourceImpl implements ModelResource {
 			return Response.status(Status.OK).entity(jsonObject.toString()).build();
 		} catch (Exception ex) {
 			trx.rollback();
-			return ResponseUtils.getResponseErrorFromException(ex, "Update error", "Update error with exception: ");
+			return ResponseUtils.getResponseErrorFromException(ex, "Update error");
 		} finally {
 			trx.close();
 		}
@@ -499,17 +716,29 @@ public class ModelResourceImpl implements ModelResource {
 
 	@Override
 	public Response delete(String tableName, String id) {
+		MRestView view = null;
+		if (useRestView) {
+			view = RestUtils.getView(tableName);
+			if (view != null)
+				tableName = MTable.getTableName(Env.getCtx(), view.getAD_Table_ID());
+			else
+				return ResponseUtils.getResponseErrorFromException(new IDempiereRestException("Invalid rest view name", "No match found for rest view name: " + tableName, Status.NOT_FOUND), "Not found");
+		}
 		
 		POParser poParser = new POParser(tableName, id, true, true);
 		if (poParser.isValidPO()) {
 			PO po = poParser.getPO();
+			if (!RestUtils.hasRoleUpdateAccess(po.getAD_Client_ID(), po.getAD_Org_ID(), po.get_Table_ID(), 0, true)) {
+				return ResponseUtils.getResponseError(Status.FORBIDDEN, "Delete error", "AccessCannotDelete","");
+			}
+
 			try {
 				po.deleteEx(true);
 				JsonObject json = new JsonObject();
 				json.addProperty("msg", Msg.getMsg(Env.getCtx(), "Deleted"));
 				return Response.ok(json.toString()).build();
 			} catch (Exception ex) {
-				return ResponseUtils.getResponseErrorFromException(ex, "Delete error", "Delete error with exception: ");
+				return ResponseUtils.getResponseErrorFromException(ex, "Delete error");
 			}
 		} else {
 			return poParser.getResponseError();
@@ -518,6 +747,15 @@ public class ModelResourceImpl implements ModelResource {
 
 	@Override
 	public Response getAttachments(String tableName, String id) {
+		MRestView view = null;
+		if (useRestView) {
+			view = RestUtils.getView(tableName);
+			if (view != null)
+				tableName = MTable.getTableName(Env.getCtx(), view.getAD_Table_ID());
+			else
+				return ResponseUtils.getResponseErrorFromException(new IDempiereRestException("Invalid rest view name", "No match found for rest view name: " + tableName, Status.NOT_FOUND), "Not found");
+		}
+		
 		JsonArray array = new JsonArray();
 		POParser poParser = new POParser(tableName, id, true, false);
 		if (poParser.isValidPO()) {
@@ -541,17 +779,37 @@ public class ModelResourceImpl implements ModelResource {
 	}
 
 	@Override
-	public Response getAttachmentsAsZip(String tableName, String id) {
+	public Response getAttachmentsAsZip(String tableName, String id, String asJson) {
+		MRestView view = null;
+		if (useRestView) {
+			view = RestUtils.getView(tableName);
+			if (view != null)
+				tableName = MTable.getTableName(Env.getCtx(), view.getAD_Table_ID());
+			else
+				return ResponseUtils.getResponseErrorFromException(new IDempiereRestException("Invalid rest view name", "No match found for rest view name: " + tableName, Status.NOT_FOUND), "Not found");
+		}
 		
 		POParser poParser = new POParser(tableName, id, true, false);
 		if (poParser.isValidPO()) {
 			PO po = poParser.getPO();
 			MAttachment attachment = po.getAttachment();
 			if (attachment != null) {
-				File zipFile = attachment.saveAsZip();
-				if (zipFile != null) {
-					FileStreamingOutput fso = new FileStreamingOutput(zipFile);
-					return Response.ok(fso).build();
+				try {
+					File zipFile = attachment.saveAsZip();
+					if (zipFile != null) {
+						if (asJson == null) {
+							FileStreamingOutput fso = new FileStreamingOutput(zipFile);
+							return Response.ok(fso).build();
+						} else {
+							JsonObject json = new JsonObject();
+							byte[] binaryData = Files.readAllBytes(zipFile.toPath());
+							String data = Base64.getEncoder().encodeToString(binaryData);
+							json.addProperty("data", data);
+							return Response.ok(json.toString()).build();
+						}
+					}
+				} catch (IOException ex) {
+					return ResponseUtils.getResponseErrorFromException(ex, "IO error");
 				}
 			}
 			return Response.status(Status.NO_CONTENT).build();
@@ -577,6 +835,10 @@ public class ModelResourceImpl implements ModelResource {
 		String base64Content = jsonElement.getAsString();
 		if (Util.isEmpty(base64Content, true))
 			return ResponseUtils.getResponseError(Status.BAD_REQUEST, "data property is mandatory", "", "");
+		
+		MRestView view = RestUtils.getView(tableName);
+		if (view != null)
+			tableName = MTable.getTableName(Env.getCtx(), view.getAD_Table_ID());
 		
 		POParser poParser = new POParser(tableName, id, true, false);
 		if (poParser.isValidPO()) {
@@ -615,7 +877,7 @@ public class ModelResourceImpl implements ModelResource {
 	            }
 	            attachment.saveEx();
 	        } catch (Exception ex) {
-				return ResponseUtils.getResponseErrorFromException(ex, "Create attachment error", "Create attachment error with exception: ");
+				return ResponseUtils.getResponseErrorFromException(ex, "Create attachment error");
 			}
 															
 			return Response.status(Status.CREATED).build();
@@ -625,8 +887,16 @@ public class ModelResourceImpl implements ModelResource {
 	}
 
 	@Override
-	public Response getAttachmentEntry(String tableName, String id, String fileName) {
-	
+	public Response getAttachmentEntry(String tableName, String id, String fileName, String asJson) {	
+		MRestView view = null;
+		if (useRestView) {
+			view = RestUtils.getView(tableName);
+			if (view != null)
+				tableName = MTable.getTableName(Env.getCtx(), view.getAD_Table_ID());
+			else
+				return ResponseUtils.getResponseErrorFromException(new IDempiereRestException("Invalid rest view name", "No match found for rest view name: " + tableName, Status.NOT_FOUND), "Not found");
+		}
+		
 		POParser poParser = new POParser(tableName, id, true, false);
 		if (poParser.isValidPO()) {
 			PO po = poParser.getPO();
@@ -639,10 +909,19 @@ public class ModelResourceImpl implements ModelResource {
 							File tempFolder = tempPath.toFile();
 							File zipFile = new File(tempFolder, fileName);
 							zipFile = entry.getFile(zipFile);
-							FileStreamingOutput fso = new FileStreamingOutput(zipFile);
-							return Response.ok(fso).build();
+							if (asJson == null) {
+								FileStreamingOutput fso = new FileStreamingOutput(zipFile);
+								String contentType = MimeType.getMimeType(zipFile.getName());
+								return Response.ok(fso).header("Content-Type", contentType).build();
+							} else {
+								JsonObject json = new JsonObject();
+								byte[] binaryData = Files.readAllBytes(zipFile.toPath());
+								String data = Base64.getEncoder().encodeToString(binaryData);
+								json.addProperty("data", data);
+								return Response.ok(json.toString()).build();
+							}
 						} catch (IOException ex) {
-							return ResponseUtils.getResponseErrorFromException(ex, "IO error", "IO error with exception: ");
+							return ResponseUtils.getResponseErrorFromException(ex, "IO error");
 						}
 					}
 				}
@@ -679,6 +958,10 @@ public class ModelResourceImpl implements ModelResource {
 		if (jsonElement != null && jsonElement.isJsonPrimitive())
 			overwrite = jsonElement.getAsBoolean();
 		
+		MRestView view = RestUtils.getView(tableName);
+		if (view != null)
+			tableName = MTable.getTableName(Env.getCtx(), view.getAD_Table_ID());
+		
 		POParser poParser = new POParser(tableName, id, true, false);
 		if (poParser.isValidPO()) {
 			PO po = poParser.getPO();
@@ -706,7 +989,7 @@ public class ModelResourceImpl implements ModelResource {
 				attachment.addEntry(fileName, data);
 				attachment.saveEx();
 			} catch (Exception ex) {
-				return ResponseUtils.getResponseErrorFromException(ex, "Save error", "Save error with exception: ");
+				return ResponseUtils.getResponseErrorFromException(ex, "Save error");
 			}
 			return Response.status(Status.CREATED).build();
 		} else {
@@ -716,6 +999,14 @@ public class ModelResourceImpl implements ModelResource {
 
 	@Override
 	public Response deleteAttachments(String tableName, String id) {
+		MRestView view = null;
+		if (useRestView) {
+			view = RestUtils.getView(tableName);
+			if (view != null)
+				tableName = MTable.getTableName(Env.getCtx(), view.getAD_Table_ID());
+			else
+				return ResponseUtils.getResponseErrorFromException(new IDempiereRestException("Invalid rest view name", "No match found for rest view name: " + tableName, Status.NOT_FOUND), "Not found");
+		}
 		
 		POParser poParser = new POParser(tableName, id, true, false);
 		if (poParser.isValidPO()) {
@@ -725,7 +1016,7 @@ public class ModelResourceImpl implements ModelResource {
 				try {
 					attachment.deleteEx(true);
 				} catch (Exception ex) {
-					return ResponseUtils.getResponseErrorFromException(ex, "Delete error", "Delete error with exception: ");
+					return ResponseUtils.getResponseErrorFromException(ex, "Delete error");
 				}
 				JsonObject json = new JsonObject();
 				json.addProperty("msg", Msg.getMsg(Env.getCtx(), "Deleted"));
@@ -740,6 +1031,14 @@ public class ModelResourceImpl implements ModelResource {
 
 	@Override
 	public Response deleteAttachmentEntry(String tableName, String id, String fileName) {
+		MRestView view = null;
+		if (useRestView) {
+			view = RestUtils.getView(tableName);
+			if (view != null)
+				tableName = MTable.getTableName(Env.getCtx(), view.getAD_Table_ID());
+			else
+				return ResponseUtils.getResponseErrorFromException(new IDempiereRestException("Invalid rest view name", "No match found for rest view name: " + tableName, Status.NOT_FOUND), "Not found");
+		}
 		
 		POParser poParser = new POParser(tableName, id, true, false);
 		if (poParser.isValidPO()) {
@@ -753,7 +1052,7 @@ public class ModelResourceImpl implements ModelResource {
 							try {
 								attachment.saveEx();
 							} catch (Exception ex) {
-								return ResponseUtils.getResponseErrorFromException(ex, "Delete error", "Delete error with exception: ");
+								return ResponseUtils.getResponseErrorFromException(ex, "Delete error");
 							}
 							JsonObject json = new JsonObject();
 							json.addProperty("msg", Msg.getMsg(Env.getCtx(), "Deleted"));
@@ -775,12 +1074,20 @@ public class ModelResourceImpl implements ModelResource {
 	
 	@Override
 	public Response printModelRecord(String tableName, String id, String reportType) {
+		MRestView view = null;
+		if (useRestView) {
+			view = RestUtils.getView(tableName);
+			if (view != null)
+				tableName = MTable.getTableName(Env.getCtx(), view.getAD_Table_ID());
+			else
+				return ResponseUtils.getResponseErrorFromException(new IDempiereRestException("Invalid rest view name", "No match found for rest view name: " + tableName, Status.NOT_FOUND), "Not found");
+		} 
 		
-		POParser poParser = new POParser(tableName, id, true, true);
+		POParser poParser = new POParser(tableName, id, true, false);
 		if (poParser.isValidPO()) {
 			PO po = poParser.getPO();
 			try {
-				MTable table = RestUtils.getTableAndCheckAccess(tableName, true);
+				MTable table = RestUtils.getTableAndCheckAccess(tableName, false);
 				int windowId = Env.getZoomWindowID(table.get_ID(), po.get_ID());
 				if (windowId == 0)
 					return ResponseUtils.getResponseError(Status.NOT_FOUND, "Window not found", "No valid window found for table name: ", tableName);
@@ -790,7 +1097,7 @@ public class ModelResourceImpl implements ModelResource {
 				WindowResource windowResource = new WindowResourceImpl();
 				return windowResource.printWindowRecord(windowSlug, po.get_ID(), reportType);
 			} catch (Exception ex) {
-				return ResponseUtils.getResponseErrorFromException(ex, "Print model error", "Print model error with exception: ");
+				return ResponseUtils.getResponseErrorFromException(ex, "Print model error");
 			}
 		} else {
 			return poParser.getResponseError();
@@ -835,7 +1142,7 @@ public class ModelResourceImpl implements ModelResource {
 				if (!Util.isEmpty(docAction, true) && !DocAction.ACTION_None.equals(docAction)) {
 					ProcessInfo processInfo = MWorkflow.runDocumentActionWorkflow(po, docAction);
 					if (processInfo.isError()) {
-						return processInfo.getSummary();
+						return Msg.parseTranslation(po.getCtx(), processInfo.getSummary());
 					} else {
 						try {
 							po.saveEx();
@@ -852,4 +1159,56 @@ public class ModelResourceImpl implements ModelResource {
 		return null;
 	}
 
+	@Override
+	public Response getModelYAML(String tableName) {
+		MTable table = RestUtils.getTableAndCheckAccess(tableName, false);
+		tableName = table.getTableName();
+		
+		StringBuilder header = new StringBuilder();
+		header.append("openapi: 3.0.0\n");
+		header.append("info:\n");
+		header.append(" ".repeat(2)).append("title: models/").append(tableName).append("\n");
+		header.append(" ".repeat(2)).append("version: 1.0.0\n");
+		YAMLSchema.addServers(header);
+		header.append("components:\n");		
+		YAMLSchema.addSecuritySchema(header);
+		YAMLSchema.addPredefinedParameters(header);
+		header.append(" ".repeat(2)).append("schemas:\n");
+		
+		StringBuilder body = new StringBuilder();
+		
+		buildYAMLForTable(table, body);
+		
+		YAMLSchema.addErrorResponseReference(header);
+		if (body.indexOf("#/components/schemas/Image") > 0) {
+			YAMLSchema.addImageReference(header);
+		}
+		if (body.indexOf("#/components/schemas/Location") > 0) {
+			YAMLSchema.addLocationReference(header, 4);			
+		}
+
+		YAMLSchema.addSecurityHeader(body);
+		body.append("paths:\n");
+		YAMLSchema.addAuthRequest(body);
+		YAMLSchema.addModelRequest(tableName, false, body);
+		
+		return Response.status(Status.OK).entity(header.append(body.toString()).toString()).build();
+	}
+
+	private void buildYAMLForTable(MTable table, StringBuilder builder) {
+		builder.append(" ".repeat(4)).append(table.getTableName()).append(":\n");
+		builder.append(" ".repeat(6)).append("type: object\n");
+		builder.append(" ".repeat(6)).append("properties:\n");
+		builder.append(" ".repeat(8)).append("id:\n");
+		builder.append(" ".repeat(10)).append("type: integer\n");
+		builder.append(" ".repeat(10)).append("readOnly: true\n");
+		builder.append(" ".repeat(10)).append("description: record id\n");
+		builder.append(" ".repeat(8)).append("uid:\n");
+		builder.append(" ".repeat(10)).append("type: string\n");
+		builder.append(" ".repeat(10)).append("readOnly: true\n");
+		builder.append(" ".repeat(10)).append("description: record uuid\n");
+		
+		YAMLSchema.addTableProperties(table, builder, 8);
+	}
+	
 }
