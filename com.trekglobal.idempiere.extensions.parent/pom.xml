@@ -10,7 +10,7 @@
 	<name>Maven parent project for Trek Global iDempiere Extensions</name>
 
 	<properties>
-		<tycho.version>3.0.5</tycho.version>
+		<tycho.version>4.0.8</tycho.version>
 		<tycho.extras.version>${tycho.version}</tycho.extras.version>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		<maven.dependency.version>3.1.1</maven.dependency.version>
@@ -190,26 +190,4 @@
 			</build>
 	    </profile>
 	</profiles>
-	    <!-- Aquí agregamos los repositorios -->
-    <repositories>
-        <!-- Repositorio central de Maven -->
-        <repository>
-            <id>central</id>
-            <url>https://repo.maven.apache.org/maven2</url>
-        </repository>
-
-        <!-- Repositorio Eclipse P2 para dependencias OSGi -->
-        <repository>
-            <id>eclipse-p2</id>
-            <layout>p2</layout>
-            <url>https://download.eclipse.org/releases/latest</url>
-        </repository>
-
-        <!-- Repositorio P2 de iDempiere -->
-        <repository>
-            <id>idempiere-p2</id>
-            <layout>p2</layout>
-            <url>file:///home/luisamesty/sources/iDempiere12/idempiere/org.idempiere.p2/target/repository</url>
-        </repository>
-    </repositories>	
 </project>
