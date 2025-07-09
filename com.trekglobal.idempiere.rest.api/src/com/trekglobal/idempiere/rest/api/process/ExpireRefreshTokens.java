@@ -30,23 +30,13 @@
  */
 package com.trekglobal.idempiere.rest.api.process;
 
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.time.Instant;
+import java.util.ArrayList;
 
 import org.compiere.model.MProcessPara;
 import org.compiere.process.ProcessInfoParameter;
 import org.compiere.process.SvrProcess;
-import org.compiere.util.DB;
 
-import com.auth0.jwt.JWT;
-import com.auth0.jwt.JWTVerifier;
-import com.auth0.jwt.algorithms.Algorithm;
-import com.auth0.jwt.interfaces.Claim;
-import com.auth0.jwt.interfaces.DecodedJWT;
 import com.trekglobal.idempiere.rest.api.model.MRefreshToken;
-import com.trekglobal.idempiere.rest.api.v1.jwt.LoginClaims;
-import com.trekglobal.idempiere.rest.api.v1.jwt.TokenUtils;
 
 @org.adempiere.base.annotation.Process
 public class ExpireRefreshTokens extends SvrProcess {
@@ -75,71 +65,24 @@ public class ExpireRefreshTokens extends SvrProcess {
 
 	@Override
 	protected String doIt() throws Exception {
-		int cnt = 0;
+		ArrayList<Object> params = new ArrayList<Object>();
+		StringBuilder where = new StringBuilder("");
 
-		if (getAD_Client_ID() == 0 && p_REST_AllTokens) {
-			cnt = DB.executeUpdateEx("DELETE FROM REST_RefreshToken", get_TrxName());
-			return "@Deleted@ " + cnt;
+		if (p_REST_AllTokens && getAD_Client_ID() > 0) {
+			where.append("AD_Client_ID=?");
+			params.add(getAD_Client_ID());
 		}
 
-		MRefreshToken.deleteExpired(get_TrxName());
-
-		PreparedStatement pstmt = null;
-		ResultSet rs = null;
-		try {
-			pstmt = DB.prepareStatement("SELECT Token FROM REST_RefreshToken", get_TrxName());
-			rs = pstmt.executeQuery();
-			while (rs.next()) {
-				String token = rs.getString(1);
-
-				// get the clientId and UserId from the token
-				try {
-					Algorithm algorithm = Algorithm.HMAC512(TokenUtils.getTokenSecret());
-					JWTVerifier verifier = JWT.require(algorithm)
-							.withIssuer(TokenUtils.getTokenIssuer())
-							.acceptExpiresAt(Instant.MAX.getEpochSecond()) // do not validate expiration of token
-							.build();
-					DecodedJWT jwt = verifier.verify(token);
-					Claim claim = jwt.getClaim(LoginClaims.AD_Client_ID.name());
-					int clientId = -1;
-					int userId = -1;
-					if (!claim.isNull() && !claim.isMissing()) {
-						clientId = claim.asInt();
-					} else {
-						// invalid refresh token - delete it
-						cnt = cnt + deleteToken(token);
-						continue;
-					}
-					claim = jwt.getClaim(LoginClaims.AD_User_ID.name());
-					if (!claim.isNull() && !claim.isMissing()) {
-						userId = claim.asInt();
-					} else {
-						// invalid refresh token - delete it
-						cnt = cnt + deleteToken(token);
-						continue;
-					}
-
-					if (clientId == getAD_Client_ID()) {
-						if (p_AD_User_ID <= 0 || userId == p_AD_User_ID) {
-							cnt = cnt + deleteToken(token);
-						}
-					}
-				} catch (Exception e) {
-					// invalid refresh token - delete it
-					cnt = cnt + deleteToken(token);
-					continue;
-				}
-			}
-		} finally {
-			DB.close(rs, pstmt);
+		if (p_AD_User_ID > 0) {
+			if (where.length() > 0)
+				where.append(" AND ");
+			where.append("CreatedBy=?");
+			params.add(p_AD_User_ID);
 		}
 
-		return "@Deleted@ " + cnt;
-	}
+		int cnt = MRefreshToken.expireTokens(where.toString(), MRefreshToken.REST_REVOKECAUSE_ManualExpire, params);
 
-	private int deleteToken(String token) {
-		int cnt = DB.executeUpdateEx("DELETE FROM REST_RefreshToken WHERE Token=?", new Object[] {token}, get_TrxName());
-		return cnt;
+		return "@Updated@ " + cnt;
 	}
 
 }

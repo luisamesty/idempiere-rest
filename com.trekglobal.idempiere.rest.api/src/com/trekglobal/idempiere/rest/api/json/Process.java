@@ -34,6 +34,8 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.text.SimpleDateFormat;
+import java.util.HashMap;
+import java.util.Map;
 
 import org.adempiere.exceptions.AdempiereException;
 import org.apache.commons.codec.binary.Base64;
@@ -49,12 +51,15 @@ import org.compiere.print.MPrintFormat;
 import org.compiere.process.ProcessInfo;
 import org.compiere.process.ProcessInfoLog;
 import org.compiere.process.ProcessInfoUtil;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
 import org.compiere.util.DisplayType;
 import org.compiere.util.Env;
 import org.compiere.util.Msg;
 import org.compiere.util.Util;
 import org.idempiere.distributed.IClusterService;
 
+import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonIOException;
@@ -71,6 +76,8 @@ import com.trekglobal.idempiere.rest.api.util.ClusterUtil;
  *
  */
 public class Process {
+
+	private final static CLogger classLog = CLogger.getCLogger(Process.class);
 
 	private Process() {
 	}
@@ -112,6 +119,8 @@ public class Process {
 			if (processPara.isRange()) {
 				String toPropertyName = propertyName + "_to";
 				element = jsonObject.get(toPropertyName);
+				if (element == null)
+					element = jsonObject.get(columnName + "_to");
 				if (element != null) {			
 					Object value = TypeConverterUtils.fromJsonValue(gridField, element);
 					if (value != null) {
@@ -203,7 +212,9 @@ public class Process {
 		processInfo.setExport(true);
 		JsonElement printFormatIdElement = jsonObject.get("print-format-id");
 		if (printFormatIdElement != null && printFormatIdElement.isJsonPrimitive()) {
-			int AD_PrintFormat_ID = printFormatIdElement.getAsInt();
+			String printFormatStr = printFormatIdElement.getAsString();
+			boolean isUUID = Util.isUUID(printFormatStr);
+			int AD_PrintFormat_ID = isUUID ? getPrintFormatId(printFormatStr) : Integer.valueOf(printFormatStr);
 			if (AD_PrintFormat_ID > 0) 
 			{
 				MPrintFormat format = new MPrintFormat(Env.getCtx(), AD_PrintFormat_ID, null);
@@ -236,6 +247,19 @@ public class Process {
 		processInfoJson.addProperty("AD_PInstance_ID", processInfo.getAD_PInstance_ID());
 		processInfoJson.addProperty("process", processSlug);
 		processInfoJson.addProperty("summary", processInfo.getSummary());
+		
+		String data = processInfo.getJsonData();
+		if (data != null && !data.isEmpty()) {
+			JsonElement dataElement;
+			try {
+				dataElement = JsonParser.parseString(data);
+				processInfoJson.add("data", dataElement.getAsJsonObject());
+			} catch (Exception e) {
+				dataElement = null;
+				classLog.warning(e.getMessage());
+			}
+		}
+		
 		processInfoJson.addProperty("isError", processInfo.isError());
 		if (processInfo.getPDFReport() != null) {
 			File file = processInfo.getPDFReport();
@@ -259,20 +283,32 @@ public class Process {
 			JsonArray logArray = new JsonArray();
 			SimpleDateFormat dateFormat = DisplayType.getDateFormat(DisplayType.Date);
 			for(ProcessInfoLog log : logs) {
-				StringBuilder sb = new StringBuilder();
+				Map<String, Object> logMap = new HashMap<String, Object>();
+				
 				if (log.getP_Date() != null)
-					sb.append(dateFormat.format(log.getP_Date()))
-					  .append(" \t");
+					logMap.put("date", dateFormat.format(log.getP_Date()));
 				//
 				if (log.getP_Number() != null)
-					sb.append(log.getP_Number())
-					  .append(" \t");
+					logMap.put("number",log.getP_Number());
+				//
+				String logData = log.getJsonData();
+				if (logData != null && !logData.isEmpty()) {
+					JsonElement dataElement;
+					try {
+						dataElement = JsonParser.parseString(logData);
+						logMap.put("data", dataElement.getAsJsonObject());
+					} catch (Exception e) {
+						dataElement = null;
+					}
+				}
 				//
 				if (log.getP_Msg() != null)
-					sb.append(Msg.parseTranslation(Env.getCtx(), log.getP_Msg()));
+					logMap.put("msg",Msg.parseTranslation(Env.getCtx(), log.getP_Msg()));
 				
-				JsonPrimitive logStr = new JsonPrimitive(sb.toString());
-				logArray.add(logStr);
+		        Gson gson = new Gson();
+		        JsonObject jsonObject = gson.toJsonTree(logMap).getAsJsonObject();
+
+				logArray.add(jsonObject);
 			}
 			processInfoJson.add("logs", logArray);
 		}
@@ -314,6 +350,11 @@ public class Process {
 			ex.printStackTrace();
 		}
 		return bos;
+	}
+
+	private static int getPrintFormatId(String uuid) {
+		String sql = "SELECT AD_PrintFormat_ID FROM AD_PrintFormat WHERE AD_PrintFormat_UU = ?";
+		return DB.getSQLValue(null, sql, uuid);
 	}
 
 }

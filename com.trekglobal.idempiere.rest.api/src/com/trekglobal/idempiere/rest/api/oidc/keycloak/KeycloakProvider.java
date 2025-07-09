@@ -25,9 +25,6 @@
 **********************************************************************/
 package com.trekglobal.idempiere.rest.api.oidc.keycloak;
 
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -36,10 +33,10 @@ import javax.ws.rs.container.ContainerRequestContext;
 
 import org.compiere.model.MOrg;
 import org.compiere.model.MRole;
+import org.compiere.model.MSession;
 import org.compiere.model.MSysConfig;
 import org.compiere.model.MUser;
 import org.compiere.model.Query;
-import org.compiere.util.DB;
 import org.compiere.util.Env;
 import org.compiere.util.Util;
 import org.osgi.service.component.annotations.Component;
@@ -52,6 +49,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.trekglobal.idempiere.rest.api.model.MOIDCService;
+import com.trekglobal.idempiere.rest.api.oidc.AbstractOIDCProvider;
 import com.trekglobal.idempiere.rest.api.oidc.AuthenticatedUser;
 import com.trekglobal.idempiere.rest.api.oidc.IOIDCProvider;
 
@@ -59,7 +57,7 @@ import com.trekglobal.idempiere.rest.api.oidc.IOIDCProvider;
  * @author hengsin
  */
 @Component(immediate = true, service = IOIDCProvider.class, property = "name=Keycloak")
-public class KeycloakProvider implements IOIDCProvider {
+public class KeycloakProvider extends AbstractOIDCProvider {
 	/**
 	 * Default constructor
 	 */
@@ -203,8 +201,8 @@ public class KeycloakProvider implements IOIDCProvider {
 		if (Util.isEmpty(userId)) {
 			throw new JWTVerificationException("Missing user claim");
 		}				
-		Query query = new Query(Env.getCtx(), MUser.Table_Name, "AD_Client_ID=? AND %s=?".formatted((useEmail ? "Email" : "Name")), null);
-		MUser user = query.setOnlyActiveRecords(true).setParameters(AD_Client_ID, userId).first();		
+		Query query = new Query(Env.getCtx(), MUser.Table_Name, "AD_Client_ID IN (0,?) AND %s=?".formatted((useEmail ? "Email" : "Name")), null);
+		MUser user = query.setOnlyActiveRecords(true).setParameters(AD_Client_ID, userId).setOrderBy("AD_Client_ID DESC").first();		
 		if (user == null) {
 			throw new JWTVerificationException("Invalid user claim");
 		}
@@ -260,52 +258,14 @@ public class KeycloakProvider implements IOIDCProvider {
 				throw new JWTVerificationException("Invalid user and organization combination");
 			}
 		}
-		
-		return new AuthenticatedUser(AD_Client_ID, AD_Org_ID, AD_Role_ID, AD_User_ID);
-	}
 
-	/**
-	 * @param AD_Client_ID
-	 * @param AD_Role_ID
-	 * @param user
-	 * @return AD_Role_ID if user+AD_Role_ID has only 1 org, otherwise -1
-	 */
-	private int getSingleOrgIdOnly(int AD_Client_ID, int AD_Role_ID, MUser user) {
-		Env.setContext(Env.getCtx(), Env.AD_CLIENT_ID, AD_Client_ID);
-		MRole role = new MRole(Env.getCtx(), AD_Role_ID, null);
-		role.setAD_User_ID(user.get_ID());
-		MOrg[] orgs = MOrg.getOfClient(AD_Client_ID);
-		int AD_Org_ID = -1;
-		for(MOrg org : orgs) {
-			if (role.isOrgAccess(org.getAD_Org_ID(), false)) {
-				if (AD_Org_ID >= 0)
-					return -1;
-				AD_Org_ID = org.getAD_Org_ID();
-			}
+		MSession session = MSession.get(Env.getCtx());
+		if (session == null){
+			session = MSession.create(Env.getCtx());
+			session.setWebSession("idempiere-rest-oidc");
+			session.saveEx();
 		}
-		return AD_Org_ID;
-	}
 
-	/**
-	 * @param AD_Client_ID
-	 * @param user
-	 * @return AD_Role_ID if user has only 1 role, otherwise -1
-	 */
-	private int getSingleRoleIDOnly(int AD_Client_ID, MUser user) {
-		StringBuilder sql = new StringBuilder("SELECT AD_Role_ID FROM AD_User_Roles WHERE IsActive='Y' AND AD_Client_ID=? AND AD_User_ID=?");
-		try (PreparedStatement stmt = DB.prepareStatement(sql.toString(), (String)null)) {
-			stmt.setInt(1, AD_Client_ID);
-			stmt.setInt(2, user.get_ID());
-			ResultSet rs = stmt.executeQuery();
-			if (rs.next()) {
-				int AD_Role_ID = rs.getInt(1);
-				if (!rs.next())
-					return AD_Role_ID;
-			}
-		} catch (SQLException e) {
-			e.printStackTrace();
-		}
-		return -1;
+		return new AuthenticatedUser(AD_Client_ID, AD_Org_ID, AD_Role_ID, AD_User_ID, session.getAD_Session_ID());
 	}
-
 }

@@ -28,34 +28,47 @@ package com.trekglobal.idempiere.rest.api.json;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Properties;
 import java.util.logging.Level;
 
 import javax.ws.rs.core.Response.Status;
 
+import org.compiere.model.MAcctSchema;
+import org.compiere.model.MAcctSchemaElement;
+import org.compiere.model.MClientInfo;
 import org.compiere.model.MColumn;
+import org.compiere.model.MCountry;
 import org.compiere.model.MRole;
+import org.compiere.model.MSysConfig;
 import org.compiere.model.MTable;
+import org.compiere.model.MUserPreference;
 import org.compiere.model.PO;
 import org.compiere.model.Query;
+import org.compiere.util.CCache;
 import org.compiere.util.CLogger;
 import org.compiere.util.DB;
 import org.compiere.util.Env;
+import org.compiere.util.Ini;
 import org.compiere.util.Language;
 import org.compiere.util.Util;
+
+import com.trekglobal.idempiere.rest.api.model.MRestView;
 
 public class RestUtils {
 
 	private final static CLogger log = CLogger.getCLogger(RestUtils.class);
 	private final static String UUID_REGEX="[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
+	private final static String EXPORT_UU_LOOKUP_SYSCONFIG_NAME = "REST_TABLES_EXPORT_LOOKUP_UU";
 
 	/**
 	 * @param value
 	 * @return true if value is a UUID identifier
 	 */
-	private static boolean isUUID(String value) {
+	public static boolean isUUID(String value) {
 		return value == null ? false : value.matches(UUID_REGEX);
 	}
 	
@@ -248,6 +261,83 @@ public class RestUtils {
 		return role.isTableAccess(table.getAD_Table_ID(), false);
 	}
 	
+	public static boolean hasRoleUpdateAccess(int AD_Client_ID, int AD_Org_ID, int AD_Table_ID, int Record_ID, boolean isNew) {
+		return MRole.getDefault(Env.getCtx(), false).canUpdate(AD_Client_ID, AD_Org_ID, AD_Table_ID, Record_ID, isNew);
+	}
+	
+	/**
+	 * Check if the role has access to this column
+	 * @param AD_Table_ID
+	 * @param AD_Column_ID
+	 * @param readOnly
+	 * @return true if user has access
+	 */
+	public static boolean hasRoleColumnAccess(int AD_Table_ID, int AD_Column_ID, boolean readOnly) {
+		return MRole.getDefault(Env.getCtx(), false).isColumnAccess(AD_Table_ID, AD_Column_ID, readOnly);
+	}
+
+	/**
+	 * Get view definition
+	 * @param name
+	 * @return Rest view.
+	 */
+	public static MRestView getView(String name) {
+		MRestView view = MRestView.get(name);
+		if (view == null || view.get_ID()==0) {
+			return null;
+		}
+		
+		return view;
+	}
+
+	/**
+	 * Get column that link parent and child table.<br/>
+	 * If same column name is use to link parent and child table, return a single column name.</br>
+	 * If different column name is use to link parent and child table, return parentColumnName:childColumnName.
+	 * @param parentTable
+	 * @param childTable
+	 * @return single column name or parentColumnName:childColumnName
+	 */
+	public static String getLinkKeyColumnName(String parentTable, String childTable) {
+		MTable pTable = MTable.get(Env.getCtx(), parentTable);
+		MTable cTable = MTable.get(Env.getCtx(), childTable);
+		if (cTable == null || cTable.getAD_Table_ID()==0) {
+			throw new IDempiereRestException("Invalid table name", "No match found for table name: " + childTable, Status.NOT_FOUND);
+		}
+		MColumn[] cColumns = cTable.getColumns(false);
+		String[] parentKeys = pTable.getKeyColumns();
+		//check parent keys
+		if (parentKeys.length == 1) {
+			if (cTable.getColumnIndex(parentKeys[0]) >= 0) {
+				return parentKeys[0];
+			}
+			//match reference table of parent and child id column
+			for(MColumn c : cColumns) {
+				if (c.getColumnName().endsWith("_ID")) {
+					if (parentTable.equalsIgnoreCase(c.getReferenceTableName())) {
+						return parentKeys[0]+":"+c.getColumnName();
+					}
+				}
+			}
+		} else if (parentKeys.length > 1) {
+			for(String pKey : parentKeys) {
+				String pRefTable = pTable.getColumn(pKey).getReferenceTableName();
+				if (pRefTable != null) {
+					//match reference table of parent and child id column
+					for(MColumn c : cColumns) {
+						if (c.getColumnName().endsWith("_ID")) {
+							if (pRefTable.equalsIgnoreCase(c.getReferenceTableName())) {
+								return pKey+":"+c.getColumnName();
+							}
+						}
+					}
+				}
+			}
+		} 
+				
+		throw new IDempiereRestException("Wrong detail", "Cannot expand to the detail table because it has no column that links to the parent table: " + childTable, Status.INTERNAL_SERVER_ERROR);
+	}
+	
 	public static String getKeyColumnName(String tableName) {
 		MTable table = MTable.get(Env.getCtx(), tableName);
 		String[] keyColumns = table.getKeyColumns();
@@ -257,4 +347,136 @@ public class RestUtils {
 
 		return keyColumns[0];
 	}
+	
+	/**
+	 * Defines whether the UUID value of a lookup record is returned in the response  
+	 * @param tableName
+	 * @return true if the lookup table should return the UUID in the REST response
+	 */
+	public static boolean isReturnUULookup(String tableName) {
+		String exportedUUTables = MSysConfig.getValue(EXPORT_UU_LOOKUP_SYSCONFIG_NAME, Env.getAD_Client_ID(Env.getCtx()));
+		return !Util.isEmpty(exportedUUTables) && 
+				(exportedUUTables.equals("ALL") || isStringInCommaSeparatedList(exportedUUTables, tableName));
+	}
+
+	public static boolean isStringInCommaSeparatedList(String commaSeparatedString, String stringToCompare) {
+		String[] tableArray = commaSeparatedString.split(",");
+		for (String tableName : tableArray) {
+			if (tableName.trim().equalsIgnoreCase(stringToCompare.trim())) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	private static CCache<Integer, Properties> ctxSessionCache = new CCache<Integer, Properties>("REST_SessionCtxCache", 100, MSysConfig.getIntValue("REST_TOKEN_EXPIRE_IN_MINUTES", 60, Env.getAD_Client_ID(Env.getCtx())));
+
+	/**
+	 * Set the session context variables
+	 */
+	public static void setSessionContextVariables(Properties ctx) {
+		int sessionId = Env.getContextAsInt(ctx, Env.AD_SESSION_ID);
+		if (sessionId > 0) {
+			if (ctxSessionCache.containsKey(sessionId)) { 
+				// key found in cache, just set the properties found in cache and return
+				Properties savedCtx = ctxSessionCache.get(sessionId);
+				setCtxFromSavedCtx(ctx, savedCtx);
+				return;
+			}
+		}
+
+		// Context session not found in cache
+		if (Util.isEmpty(Env.getContext(ctx, Env.DATE)))
+			Env.setContext(ctx, Env.DATE, new Timestamp(System.currentTimeMillis()));
+
+		boolean roleSet = ! Util.isEmpty(Env.getContext(ctx, Env.AD_ROLE_ID));
+		if (roleSet) {
+			MRole role = MRole.getDefault();
+			Env.setContext(ctx, Env.SHOW_ACCOUNTING, role.isShowAcct());
+			Env.setPredefinedVariables(ctx, -1, role.getPredefinedContextVariables());
+			if (role.isShowAcct())
+				Env.setContext(ctx, Env.SHOW_ACCOUNTING, Ini.getProperty(Ini.P_SHOW_ACCT));
+			else
+				Env.setContext(ctx, Env.SHOW_ACCOUNTING, "N");
+			Env.setContext(ctx, Env.SHOW_ADVANCED, MRole.getDefault().isAccessAdvanced());
+		}
+
+		int clientId = Env.getAD_Client_ID(ctx);
+		int orgId = Env.getAD_Org_ID(ctx);
+		if (clientId > 0) {
+			MClientInfo clientInfo = MClientInfo.get(ctx, clientId);
+			/** Define AcctSchema , Currency, HasAlias **/
+			if (clientInfo.getC_AcctSchema1_ID() > 0) {
+				MAcctSchema primary = MAcctSchema.get(ctx, clientInfo.getC_AcctSchema1_ID());
+				Env.setContext(ctx, Env.C_ACCTSCHEMA_ID, primary.getC_AcctSchema_ID());
+				Env.setContext(ctx, Env.C_CURRENCY_ID, primary.getC_Currency_ID());
+				Env.setContext(ctx, Env.HAS_ALIAS, primary.isHasAlias());
+				MAcctSchemaElement[] els = MAcctSchemaElement.getAcctSchemaElements(primary);
+				for (MAcctSchemaElement el : els)
+					Env.setContext(ctx, "$Element_" + el.getElementType(), "Y");
+			}
+			MAcctSchema[] ass = MAcctSchema.getClientAcctSchema(ctx, clientId);
+			if (ass != null && ass.length > 1) {
+				for (MAcctSchema as : ass) {
+					if (as.getAD_OrgOnly_ID() != 0) {
+						if (as.isSkipOrg(orgId)) {
+							continue;
+						} else  {
+							Env.setContext(ctx, Env.C_ACCTSCHEMA_ID, as.getC_AcctSchema_ID());
+							Env.setContext(ctx, Env.C_CURRENCY_ID, as.getC_Currency_ID());
+							Env.setContext(ctx, Env.HAS_ALIAS, as.isHasAlias());
+							MAcctSchemaElement[] els = MAcctSchemaElement.getAcctSchemaElements(as);
+							for (MAcctSchemaElement el : els)
+								Env.setContext(ctx, "$Element_" + el.getElementType(), "Y");
+							break;
+						}
+					}
+				}
+			}
+		}
+
+		Env.setContext(ctx, Env.SHOW_TRANSLATION, Ini.getProperty(Ini.P_SHOW_TRL));
+		Env.setContext(ctx, Env.DEVELOPER_MODE, Util.isDeveloperMode() ? "Y" : "N");
+
+		if (Env.getAD_User_ID(ctx) > 0) {
+			MUserPreference userPreference = MUserPreference.getUserPreference(Env.getAD_User_ID(ctx), Env.getAD_Client_ID(ctx));
+			userPreference.fillPreferences();
+		}
+
+		Env.setContext(ctx, Env.C_COUNTRY_ID, MCountry.getDefault().getC_Country_ID());
+
+		// TODO: Preferences?  // can have impact on performance, driven by SysConfig?
+		// TODO: Defaults?     // can have impact on performance, driven by SysConfig?
+		// TODO: ModelValidationEngine.get().afterLoadPreferences(m_ctx);    // is this necessary?
+
+		if (sessionId > 0) {
+			Properties saveCtx = new Properties();
+			saveCtx.putAll(ctx);
+			ctxSessionCache.put(sessionId, saveCtx);
+		}
+	}
+
+	/**
+	 * Set a context from a saved/cached context
+	 * @param ctx
+	 * @param savedCtx
+	 */
+	private static void setCtxFromSavedCtx(Properties ctx, Properties savedCtx) {
+		savedCtx.forEach((key, value) -> {
+			if (value instanceof String)
+				Env.setContext(ctx, key.toString(), value.toString());
+			else
+				ctx.put(key, value);
+		});
+	}
+
+	/**
+	 * Remove a session from cache - on logout
+	 * @param sessionId
+	 */
+	public static void removeSavedCtx(int sessionId) {
+		ctxSessionCache.remove(sessionId);
+	}
+
 }
