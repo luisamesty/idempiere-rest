@@ -50,6 +50,7 @@ public interface FileResource {
 	 * @param fileName
 	 * @param length
 	 * @param nodeId
+	 * @param asJson if provided, the response will be in JSON format with file content as base64 encoded string.
 	 * @return response
 	 */
 	public Response getFile(@QueryParam("fileName") String fileName, @QueryParam("length") @DefaultValue("0") long length,
