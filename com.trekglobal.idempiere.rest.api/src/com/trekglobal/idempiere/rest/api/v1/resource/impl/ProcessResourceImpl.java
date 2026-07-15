@@ -55,7 +55,9 @@ import org.compiere.util.CLogger;
 import org.compiere.util.DisplayType;
 import org.compiere.util.Env;
 import org.compiere.util.Msg;
+import org.compiere.util.Trx;
 import org.compiere.util.Util;
+import org.idempiere.tracking.AuditTraceContext;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -69,6 +71,7 @@ import com.trekglobal.idempiere.rest.api.json.TypeConverterUtils;
 import com.trekglobal.idempiere.rest.api.json.filter.ConvertedQuery;
 import com.trekglobal.idempiere.rest.api.json.filter.IQueryConverter;
 import com.trekglobal.idempiere.rest.api.util.ErrorBuilder;
+import com.trekglobal.idempiere.rest.api.util.ThreadLocalTrx;
 import com.trekglobal.idempiere.rest.api.v1.resource.ProcessResource;
 
 /**
@@ -203,8 +206,18 @@ public class ProcessResourceImpl implements ProcessResource {
 		MPInstance pInstance = Process.createPInstance(process, jsonObject, false);
 		
 		ProcessInfo processInfo = Process.createProcessInfo(process, pInstance, jsonObject);
+
+		if(processInfo.isProcessRunning(pInstance.getParameters())) {
+			return Response.status(Status.CONFLICT)
+					.entity(new ErrorBuilder().status(Status.CONFLICT).title(Msg.getMsg(Env.getCtx(), "ProcessAlreadyRunning")).append(processSlug).build().toString())
+					.build();
+		}
 		
-		ServerProcessCtl.process(processInfo, null);
+		Trx trx = null;
+		String threadLocalTrxName = ThreadLocalTrx.getTrxName();
+		if (threadLocalTrxName != null)
+			trx = Trx.get(threadLocalTrxName, false);
+		ServerProcessCtl.process(processInfo, trx);
 		
 		JsonObject processInfoJson = Process.toJsonObject(processInfo, processSlug);
 		
@@ -273,6 +286,12 @@ public class ProcessResourceImpl implements ProcessResource {
 		JsonObject jsonObject = gson.fromJson(jsonText, JsonObject.class);
 		MPInstance pInstance = Process.createPInstance(process, jsonObject, true);
 		ProcessInfo processInfo = Process.createProcessInfo(process, pInstance, jsonObject);
+
+		if(processInfo.isProcessRunning(pInstance.getParameters())) {
+			return Response.status(Status.CONFLICT)
+					.entity(new ErrorBuilder().status(Status.CONFLICT).title(Msg.getMsg(Env.getCtx(), "ProcessAlreadyRunning")).append(processSlug).build().toString())
+					.build();
+		}
 		
 		int AD_User_ID = Env.getAD_User_ID(Env.getCtx());
 		MPInstance.publishChangedEvent(AD_User_ID);
@@ -296,6 +315,7 @@ public class ProcessResourceImpl implements ProcessResource {
 	private class BackgroundJobRunnable implements Runnable
 	{
 		private Properties m_ctx;
+		private String m_externalTraceId;
 		private ProcessInfo m_pi;
 		
 		private BackgroundJobRunnable(Properties ctx, ProcessInfo pi) 
@@ -313,6 +333,7 @@ public class ProcessResourceImpl implements ProcessResource {
 			Env.setContext(m_ctx, Env.DATE, ctx.getProperty(Env.DATE));
 			RestUtils.setSessionContextVariables(m_ctx);
 
+			m_externalTraceId = AuditTraceContext.getExternalTraceId();
 			m_pi = pi;
 		}
 		
@@ -320,9 +341,12 @@ public class ProcessResourceImpl implements ProcessResource {
 		public void run() {
 			try {
 				ServerContext.setCurrentInstance(m_ctx);
+				if (!Util.isEmpty(m_externalTraceId))
+					AuditTraceContext.setExternalTraceId(m_externalTraceId);
 				doRun();
 			} finally {
 				ServerContext.dispose();
+				AuditTraceContext.clear();
 			}
 		}
 		
