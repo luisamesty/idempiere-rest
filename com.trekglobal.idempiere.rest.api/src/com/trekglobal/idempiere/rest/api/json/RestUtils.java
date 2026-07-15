@@ -28,32 +28,30 @@ package com.trekglobal.idempiere.rest.api.json;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Properties;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Level;
 
 import javax.ws.rs.core.Response.Status;
 
-import org.compiere.model.MAcctSchema;
-import org.compiere.model.MAcctSchemaElement;
-import org.compiere.model.MClientInfo;
 import org.compiere.model.MColumn;
-import org.compiere.model.MCountry;
+import org.compiere.model.MOrg;
 import org.compiere.model.MRole;
 import org.compiere.model.MSysConfig;
 import org.compiere.model.MTable;
-import org.compiere.model.MUserPreference;
+import org.compiere.model.MWarehouse;
 import org.compiere.model.PO;
 import org.compiere.model.Query;
 import org.compiere.util.CCache;
 import org.compiere.util.CLogger;
 import org.compiere.util.DB;
 import org.compiere.util.Env;
-import org.compiere.util.Ini;
+import org.compiere.util.KeyNamePair;
 import org.compiere.util.Language;
+import org.compiere.util.Login;
 import org.compiere.util.Util;
 
 import com.trekglobal.idempiere.rest.api.model.MRestView;
@@ -64,6 +62,8 @@ public class RestUtils {
 	private final static String UUID_REGEX="[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
 	private final static String EXPORT_UU_LOOKUP_SYSCONFIG_NAME = "REST_TABLES_EXPORT_LOOKUP_UU";
 
+	private static final AtomicInteger windowNoAtomic = new AtomicInteger(1);
+	
 	/**
 	 * @param value
 	 * @return true if value is a UUID identifier
@@ -73,11 +73,23 @@ public class RestUtils {
 	}
 	
 	public static Query getQuery(String tableName, String recordID, boolean fullyQualified, boolean RW) {
+		return getQuery(tableName, recordID, fullyQualified, RW, null);
+	}
+	
+	public static Query getQuery(String tableName, String recordID, boolean fullyQualified, boolean RW, String whereClause) {
 		boolean isUUID = isUUID(recordID);
 		
 		String keyColumn = getKeyColumn(tableName, isUUID);
 		
-		Query query = new Query(Env.getCtx(), tableName, keyColumn + "=?", null);
+		StringBuilder where = new StringBuilder(keyColumn).append("=?");
+		if (!Util.isEmpty(whereClause, true)) {
+			int atIdx = whereClause.indexOf("@");
+			if (atIdx >= 0 && whereClause.indexOf("@", atIdx+1) > atIdx) {
+				whereClause = Env.parseContext(Env.getCtx(), -1, whereClause, false);
+			}
+			where.append(" AND (").append(whereClause).append(")");
+		}
+		Query query = new Query(Env.getCtx(), tableName, where.toString(), null);
 		
 		if (fullyQualified || RW)
 			query.setApplyAccessFilter(fullyQualified, RW);
@@ -143,6 +155,10 @@ public class RestUtils {
 	}
 	
 	public static String[] getSelectedColumns(String tableName, String selectClause) {
+		return getSelectedColumns(null, tableName, selectClause);
+	}
+	
+	public static String[] getSelectedColumns(MRestView restView, String tableName, String selectClause) {
 		List<String> selectedColumns = new ArrayList<String>();
 		if (Util.isEmpty(selectClause, true) || Util.isEmpty(tableName, true))
 			return new String[0];
@@ -150,6 +166,11 @@ public class RestUtils {
 		MTable mTable = MTable.get(Env.getCtx(), tableName);
 		String[] columnNames = selectClause.split("[,]");
 		for(String columnName : columnNames) {
+			if (restView != null) {
+				String restViewColumnName = restView.toColumnName(columnName);
+				if (restViewColumnName != null)
+					columnName = restViewColumnName;
+			}
 			MTable table = mTable;
 			if (table.getColumnIndex(columnName.trim()) < 0)
 				throw new IDempiereRestException(columnName + " is not a valid column of table " + table.getTableName(), Status.BAD_REQUEST);
@@ -363,14 +384,29 @@ public class RestUtils {
 	}
 	
 	public static String getKeyColumnName(String tableName) {
+		return getKeyColumnName(tableName, false);
+	}
+		
+	/**
+	 * Get the primary key column name for a table.
+	 * @param tableName the table name
+	 * @param nullForMultipleKeys if true, return null when table has zero or multiple primary keys; 
+	 *                             if false, throw an exception in those cases
+	 * @return the primary key column name, or null if nullForMultipleKeys is true and table has != 1 primary key
+	 * @throws IDempiereRestException if nullForMultipleKeys is false and table has zero or multiple primary keys
+	 */
+	public static String getKeyColumnName(String tableName, boolean nullForMultipleKeys) {
 		MTable table = MTable.get(Env.getCtx(), tableName);
 		if (table == null)
 			throw new IDempiereRestException("Invalid Table Name", "The requested table name is invalid or does not exist. Please verify the table name and try again.", Status.BAD_REQUEST);
 		
 		String[] keyColumns = table.getKeyColumns();
 		
-		if (keyColumns.length <= 0 || keyColumns.length > 1)
+		if (keyColumns.length <= 0 || keyColumns.length > 1) {
+			if (nullForMultipleKeys)
+				return null;
 			throw new IDempiereRestException("Wrong detail", "Cannot expand to the detail table because it has none or more than one primary key: " + tableName, Status.INTERNAL_SERVER_ERROR);
+		}
 
 		return keyColumns[0];
 	}
@@ -415,71 +451,30 @@ public class RestUtils {
 				setCtxFromSavedCtx(ctx, savedCtx);
 				return;
 			}
+		} else {
+			// no session yet, can be in the login process
+			return;
 		}
 
 		// Context session not found in cache
-		if (Util.isEmpty(Env.getContext(ctx, Env.DATE)))
-			Env.setContext(ctx, Env.DATE, new Timestamp(System.currentTimeMillis()));
-
-		boolean roleSet = ! Util.isEmpty(Env.getContext(ctx, Env.AD_ROLE_ID));
-		if (roleSet) {
-			MRole role = MRole.getDefault();
-			Env.setContext(ctx, Env.SHOW_ACCOUNTING, role.isShowAcct());
-			Env.setPredefinedVariables(ctx, -1, role.getPredefinedContextVariables());
-			if (role.isShowAcct())
-				Env.setContext(ctx, Env.SHOW_ACCOUNTING, Ini.getProperty(Ini.P_SHOW_ACCT));
-			else
-				Env.setContext(ctx, Env.SHOW_ACCOUNTING, "N");
-			Env.setContext(ctx, Env.SHOW_ADVANCED, MRole.getDefault().isAccessAdvanced());
-		}
-
-		int clientId = Env.getAD_Client_ID(ctx);
+		Login login = new Login(ctx);
 		int orgId = Env.getAD_Org_ID(ctx);
-		if (clientId > 0) {
-			MClientInfo clientInfo = MClientInfo.get(ctx, clientId);
-			/** Define AcctSchema , Currency, HasAlias **/
-			if (clientInfo.getC_AcctSchema1_ID() > 0) {
-				MAcctSchema primary = MAcctSchema.get(ctx, clientInfo.getC_AcctSchema1_ID());
-				Env.setContext(ctx, Env.C_ACCTSCHEMA_ID, primary.getC_AcctSchema_ID());
-				Env.setContext(ctx, Env.C_CURRENCY_ID, primary.getC_Currency_ID());
-				Env.setContext(ctx, Env.HAS_ALIAS, primary.isHasAlias());
-				MAcctSchemaElement[] els = MAcctSchemaElement.getAcctSchemaElements(primary);
-				for (MAcctSchemaElement el : els)
-					Env.setContext(ctx, "$Element_" + el.getElementType(), "Y");
-			}
-			MAcctSchema[] ass = MAcctSchema.getClientAcctSchema(ctx, clientId);
-			if (ass != null && ass.length > 1) {
-				for (MAcctSchema as : ass) {
-					if (as.getAD_OrgOnly_ID() != 0) {
-						if (as.isSkipOrg(orgId)) {
-							continue;
-						} else  {
-							Env.setContext(ctx, Env.C_ACCTSCHEMA_ID, as.getC_AcctSchema_ID());
-							Env.setContext(ctx, Env.C_CURRENCY_ID, as.getC_Currency_ID());
-							Env.setContext(ctx, Env.HAS_ALIAS, as.isHasAlias());
-							MAcctSchemaElement[] els = MAcctSchemaElement.getAcctSchemaElements(as);
-							for (MAcctSchemaElement el : els)
-								Env.setContext(ctx, "$Element_" + el.getElementType(), "Y");
-							break;
-						}
-					}
-				}
+		KeyNamePair orgKNPair = null;
+		if (orgId >= 0) {
+			MOrg org = MOrg.get(orgId);
+			if (org != null) {
+				orgKNPair = new KeyNamePair(orgId, org.getName());
 			}
 		}
-
-		Env.setContext(ctx, Env.SHOW_TRANSLATION, Ini.getProperty(Ini.P_SHOW_TRL));
-		Env.setContext(ctx, Env.DEVELOPER_MODE, Util.isDeveloperMode() ? "Y" : "N");
-
-		if (Env.getAD_User_ID(ctx) > 0) {
-			MUserPreference userPreference = MUserPreference.getUserPreference(Env.getAD_User_ID(ctx), Env.getAD_Client_ID(ctx));
-			userPreference.fillPreferences();
+		KeyNamePair warehouseKNPair = null;
+		int whId = Env.getContextAsInt(ctx, Env.M_WAREHOUSE_ID);
+		if (whId > 0) {
+			MWarehouse wh = MWarehouse.get(whId);
+			if (wh != null) {
+				warehouseKNPair = new KeyNamePair(whId, wh.getName());
+			}
 		}
-
-		Env.setContext(ctx, Env.C_COUNTRY_ID, MCountry.getDefault().getC_Country_ID());
-
-		// TODO: Preferences?  // can have impact on performance, driven by SysConfig?
-		// TODO: Defaults?     // can have impact on performance, driven by SysConfig?
-		// TODO: ModelValidationEngine.get().afterLoadPreferences(m_ctx);    // is this necessary?
+		login.loadPreferences(orgKNPair, warehouseKNPair, null, null);
 
 		if (sessionId > 0) {
 			Properties saveCtx = new Properties();
@@ -509,5 +504,13 @@ public class RestUtils {
 	public static void removeSavedCtx(int sessionId) {
 		ctxSessionCache.remove(sessionId);
 	}
+    
+    /**
+     * Get a unique window number for context management
+     * @return unique window number
+     */
+    public static int getWindowNo() {
+        return windowNoAtomic.getAndIncrement();
+    }
 
 }

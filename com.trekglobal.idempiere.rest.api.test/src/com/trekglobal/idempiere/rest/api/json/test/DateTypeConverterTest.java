@@ -32,6 +32,7 @@ import static org.mockito.Mockito.when;
 
 import java.sql.Timestamp;
 import java.text.SimpleDateFormat;
+import java.time.Instant;
 import java.util.Date;
 
 import org.compiere.model.MColumn;
@@ -71,7 +72,16 @@ public class DateTypeConverterTest extends RestTestCase {
     public void toJsonValueFormatsDateCorrectlyForDateTimeDisplayType() {
         when(mockColumn.getAD_Reference_ID()).thenReturn(DisplayType.DateTime);
         Date date = new Date();
-        String expected = new SimpleDateFormat(DateTypeConverter.ISO8601_DATETIME_PATTERN).format(date);
+        String expected = new SimpleDateFormat(DateTypeConverter.ISO8601_DATETIME_WITH_TIMEZONE_PATTERN).format(date);
+        Object result = converter.toJsonValue(mockColumn, date);
+        assertEquals(expected, result);
+    }
+
+    @Test
+    public void toJsonValueFormatsDateCorrectlyForTimestampWithTimeZoneDisplayType() {
+        when(mockColumn.getAD_Reference_ID()).thenReturn(DisplayType.TimestampWithTimeZone);
+        Date date = new Date();
+        String expected = date.toInstant().toString();
         Object result = converter.toJsonValue(mockColumn, date);
         assertEquals(expected, result);
     }
@@ -98,7 +108,16 @@ public class DateTypeConverterTest extends RestTestCase {
         String dateTimeString = "2023-10-01T12:34:56Z";
         JsonPrimitive jsonValue = new JsonPrimitive(dateTimeString);
         Timestamp result = (Timestamp) converter.fromJsonValue(mockColumn, jsonValue);
-        assertEquals(dateTimeString, new SimpleDateFormat(DateTypeConverter.ISO8601_DATETIME_PATTERN).format(result));
+        assertEquals(dateTimeString, result.toInstant().toString());
+    }
+
+    @Test
+    public void fromJsonValueParsesValidTimestampStringForTimestampWithTimeZoneDisplayType() {
+        when(mockColumn.getAD_Reference_ID()).thenReturn(DisplayType.TimestampWithTimeZone);
+        String timestampString = "2023-10-01T12:34:56.789Z";
+        JsonPrimitive jsonValue = new JsonPrimitive(timestampString);
+        Timestamp result = (Timestamp) converter.fromJsonValue(mockColumn, jsonValue);
+        assertEquals(timestampString, result.toInstant().toString());
     }
 
     @Test
@@ -114,10 +133,32 @@ public class DateTypeConverterTest extends RestTestCase {
     }
 
     @Test
+    public void fromJsonValueThrowsExceptionForInvalidTimestampString() {
+        when(mockColumn.getAD_Reference_ID()).thenReturn(DisplayType.TimestampWithTimeZone);
+        JsonPrimitive jsonValue = new JsonPrimitive("invalid-timestamp");
+        try {
+            converter.fromJsonValue(mockColumn, jsonValue);
+            fail("Expected IDempiereRestException to be thrown");
+        } catch (IDempiereRestException e) {
+            assertTrue(e.getTitle().contains("Invalid ISO Timestamp"));
+        }
+    }
+
+    @Test
     public void getPatternReturnsNullForUnsupportedDisplayType() {
         when(mockColumn.getAD_Reference_ID()).thenReturn(DisplayType.String);
         Object result = converter.toJsonValue(mockColumn, new Date());
         assertNull(result);
     }
 
+    @Test
+    public void fromJsonValueRoundTripsNanoPrecisionForTimestampWithTimeZoneDisplayType() {
+        when(mockColumn.getAD_Reference_ID()).thenReturn(DisplayType.TimestampWithTimeZone);
+        String timestampString = "2023-10-01T12:34:56.123456789Z";
+        JsonPrimitive jsonValue = new JsonPrimitive(timestampString);
+        Timestamp result = (Timestamp) converter.fromJsonValue(mockColumn, jsonValue);
+        assertEquals(timestampString, result.toInstant().toString());
+        // and serialization round-trip
+        assertEquals(timestampString, converter.toJsonValue(mockColumn, result));
+    }
 }

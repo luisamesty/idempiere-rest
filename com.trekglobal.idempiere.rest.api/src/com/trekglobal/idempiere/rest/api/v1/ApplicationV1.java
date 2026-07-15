@@ -40,10 +40,12 @@ import com.trekglobal.idempiere.rest.api.v1.auth.filter.RequestFilter;
 import com.trekglobal.idempiere.rest.api.v1.auth.filter.RequestSetLanguageFilter;
 import com.trekglobal.idempiere.rest.api.v1.auth.filter.ResponseFilter;
 import com.trekglobal.idempiere.rest.api.v1.auth.impl.AuthServiceImpl;
+import com.trekglobal.idempiere.rest.api.v1.resource.impl.BatchRequestResourseImpl;
 import com.trekglobal.idempiere.rest.api.v1.resource.impl.CacheResourceImpl;
 import com.trekglobal.idempiere.rest.api.v1.resource.impl.ChartResourceImpl;
 import com.trekglobal.idempiere.rest.api.v1.resource.impl.FileResourceImpl;
 import com.trekglobal.idempiere.rest.api.v1.resource.impl.FormResourceImpl;
+import com.trekglobal.idempiere.rest.api.v1.resource.impl.HealthResourceImpl;
 import com.trekglobal.idempiere.rest.api.v1.resource.impl.InfoResourceImpl;
 import com.trekglobal.idempiere.rest.api.v1.resource.impl.MenuTreeResourceImpl;
 import com.trekglobal.idempiere.rest.api.v1.resource.impl.ModelResourceImpl;
@@ -56,6 +58,7 @@ import com.trekglobal.idempiere.rest.api.v1.resource.impl.TaskResourceImpl;
 import com.trekglobal.idempiere.rest.api.v1.resource.impl.UploadResourceImpl;
 import com.trekglobal.idempiere.rest.api.v1.resource.impl.ViewResourceImpl;
 import com.trekglobal.idempiere.rest.api.v1.resource.impl.WindowResourceImpl;
+import com.trekglobal.idempiere.rest.api.v1.resource.impl.WebhookInboundResourceImpl;
 import com.trekglobal.idempiere.rest.api.v1.resource.impl.WorkflowResourceImpl;
 
 /**
@@ -96,7 +99,10 @@ public class ApplicationV1 extends Application {
         classes.add(ViewResourceImpl.class);
         classes.add(TaskResourceImpl.class);
         classes.add(UploadResourceImpl.class);
-        
+        classes.add(BatchRequestResourseImpl.class);
+        classes.add(HealthResourceImpl.class);
+        classes.add(WebhookInboundResourceImpl.class);
+
         IServicesHolder<ResourceExtension> list = Service.locator().list(ResourceExtension.class);
         for (IServiceReferenceHolder<ResourceExtension> holder : list.getServiceReferences()) {
         	ResourceExtension service = holder.getService();

@@ -25,6 +25,7 @@
 **********************************************************************/
 package com.trekglobal.idempiere.rest.api.json.expand;
 
+import java.io.Serializable;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -36,6 +37,8 @@ import org.compiere.model.MTable;
 import org.compiere.model.MTree_Base;
 import org.compiere.model.PO;
 import org.compiere.model.Query;
+import org.compiere.util.CLogger;
+import org.compiere.util.DB;
 import org.compiere.util.Env;
 import org.compiere.util.Util;
 
@@ -60,6 +63,7 @@ public class ExpandParser {
 	private Map<String, String> tableNameSQLStatementMap = new HashMap<>();
 	private Map<String, JsonElement> tableNameChildArrayMap = new HashMap<>();
 	private MRestView view;
+	private final static CLogger log = CLogger.getCLogger(ExpandParser.class);
 	
 	public ExpandParser(PO po, String expandParameter) {
 		this(po, null, expandParameter);
@@ -156,6 +160,11 @@ public class ExpandParser {
 		if ("Node_ID".equalsIgnoreCase(columnName) && po.get_ValueAsInt("AD_Tree_ID") > 0) {
 			tableName = MTree_Base.get(po.get_ValueAsInt("AD_Tree_ID")).getSourceTableName(true);
 		}
+		if (po.is_Partial() && !po.is_ColumnLoaded(columnName)) {
+			// the foreign key was not included, reload the PO
+			log.warning("For performance reasons, it is recommended to include foreign keys in the $select clause when expanding master records. Reloaded PO to get value for column: " + columnName);
+			po.load(po.get_TrxName());
+		}
 		String foreignTableID = po.get_ValueAsString(columnName);
 		
 		Query query = RestUtils.getQuery(tableName, foreignTableID, true, false);
@@ -167,7 +176,7 @@ public class ExpandParser {
 		if (poParser.isValidPO()) {
 			IPOSerializer serializer = IPOSerializer.getPOSerializer(tableName, po.getClass());
 			String select = ExpandUtils.getSelectClause(operators);
-			String[] includes = RestUtils.getSelectedColumns(tableName, select); 
+			String[] includes = RestUtils.getSelectedColumns(referenceView, tableName, select); 
 			if (includes != null && includes.length > 0)
 				query.selectColumns(includes);
 			JsonObject json = serializer.toJson(po, referenceView, includes, null);
@@ -207,9 +216,7 @@ public class ExpandParser {
 		}
 
 		String select = ExpandUtils.getSelectClause(operators);
-		includes = RestUtils.getSelectedColumns(tableName, select);
-		if (detailView != null && includes != null && includes.length > 0)
-			includes = detailView.toColumnNames(includes, true);
+		includes = RestUtils.getSelectedColumns(detailView, tableName, select);
 		List<PO> childPOs = getChildPOs(operators, tableName, parentKeyColumn, childKeyColumn, includes);
 		if (childPOs != null && childPOs.size() > 0) {
 			JsonArray childArray = new JsonArray();
@@ -294,7 +301,7 @@ public class ExpandParser {
 		MColumn column = MColumn.get(Env.getCtx(), tableName, childKeyColumn);
 		if (column == null)
 			throw new IDempiereRestException("Invalid column for expand: " + childKeyColumn, Status.BAD_REQUEST);
-		int parentId = masterTableName.equalsIgnoreCase(column.getReferenceTableName()) ? po.get_ID() : po.get_ValueAsInt(parentKeyColumn); 
+		Serializable parentId = getParentId(column, childKeyColumn, parentKeyColumn);
 		
 		String filter = getFilterClause(operators, childKeyColumn, parentId);
 		String orderBy = ExpandUtils.getOrderByClause(operators);
@@ -305,12 +312,37 @@ public class ExpandParser {
 		return new ModelHelper(tableName, filter, orderBy, top, skip, null, null, label);
 	}
 	
-	public String getFilterClause(List<String> operators, String keyColumnName, int keyColumnValue) {
-		StringBuilder filterClause = new StringBuilder(keyColumnName + " eq " + keyColumnValue);
+	private Serializable getParentId(MColumn column, String childKeyColumn, String parentKeyColumn) {
+	    if (masterTableName.equalsIgnoreCase(column.getReferenceTableName()) || ExpandUtils.isRecordIDTableIDFK(childKeyColumn)) {
+	        return getIdForTable(MTable.get(po.get_Table_ID()), po, null);
+	    }
+	    
+	    MTable referenceTable = MTable.get(Env.getCtx(), column.getReferenceTableName());
+	    if (referenceTable != null) {
+	        return getIdForTable(referenceTable, po, parentKeyColumn);
+	    }
+	    
+	    return po.get_ID(); // fallback to normal ID
+	}
+	
+	private Serializable getIdForTable(MTable table, PO po, String keyColumn) {
+	    if (table.isUUIDKeyTable()) {
+	        return keyColumn != null ? po.get_ValueAsString(keyColumn) : po.get_UUID();
+	    }
+	    return keyColumn != null ? po.get_ValueAsInt(keyColumn) : po.get_ID();
+	}
+	
+	public String getFilterClause(List<String> operators, String keyColumnName, Serializable keyColumnValue) {
+		StringBuilder filterClause = new StringBuilder(keyColumnName + " eq ");
+		if (keyColumnValue instanceof String keyColumnValueString)
+			filterClause.append(DB.TO_STRING(keyColumnValueString));
+		else
+			filterClause.append(keyColumnValue);
 		
-		if (ExpandUtils.isRecordIDTableIDFK(keyColumnName))
+		if (   ExpandUtils.isRecordIDTableIDFK(keyColumnName)
+			|| ExpandUtils.isRecordUUTableUUFK(keyColumnName))
 			filterClause.append(" AND ").append(ExpandUtils.TABLE_ID_COLUMN).append(" eq ").append(po.get_Table_ID());
-		
+
 		String requestFilterClause = ExpandUtils.getFilterClause(operators);
 		if (!Util.isEmpty(requestFilterClause)) 
 			filterClause.append(" AND ").append(requestFilterClause);

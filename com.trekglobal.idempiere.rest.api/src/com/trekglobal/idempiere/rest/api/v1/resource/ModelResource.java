@@ -231,7 +231,30 @@ public interface ModelResource {
 	 * @return http response
 	 */
 	public Response deleteAttachmentEntry(@PathParam("tableName") String tableName, @PathParam("id") String id, @PathParam("fileName") String fileName);
-	
+
+	@Path("{tableName}/{id}/archives")
+	@GET
+	@Produces(MediaType.APPLICATION_JSON)
+	/**
+	 * Get archives (e.g. previously printed report PDFs) of a record, most recent first
+	 * @param tableName
+	 * @param id record id/uuid
+	 * @return json array of archive item
+	 */
+	public Response getArchives(@PathParam("tableName") String tableName, @PathParam("id") String id);
+
+	@Path("{tableName}/{id}/archives/{archiveId}")
+	@GET
+	@Produces({MediaType.APPLICATION_OCTET_STREAM, MediaType.APPLICATION_JSON})
+	/**
+	 * Get content of an archive item
+	 * @param tableName
+	 * @param id record id/uuid
+	 * @param archiveId AD_Archive_ID of an archive item
+	 * @return binary stream of an archive item
+	 */
+	public Response getArchiveEntry(@PathParam("tableName") String tableName, @PathParam("id") String id, @PathParam("archiveId") int archiveId, @QueryParam(QueryOperators.AS_JSON) String asJson);
+
 	@Path("{tableName}/{id}/print")
 	@GET
 	@Produces(MediaType.APPLICATION_JSON)

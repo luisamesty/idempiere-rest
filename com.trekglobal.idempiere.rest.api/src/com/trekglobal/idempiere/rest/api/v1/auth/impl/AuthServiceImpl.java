@@ -28,6 +28,7 @@ package com.trekglobal.idempiere.rest.api.v1.auth.impl;
 import java.security.SecureRandom;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.logging.Level;
 import java.util.regex.Pattern;
 
 import javax.servlet.http.HttpServletRequest;
@@ -36,6 +37,9 @@ import javax.ws.rs.core.Response;
 import javax.ws.rs.core.Response.Status;
 import javax.xml.bind.DatatypeConverter;
 
+import org.adempiere.base.Core;
+import org.adempiere.base.IPasswordResetService;
+import org.adempiere.exceptions.AdempiereException;
 import org.adempiere.util.LogAuthFailure;
 import org.compiere.model.I_AD_Preference;
 import org.compiere.model.MClient;
@@ -56,6 +60,7 @@ import org.compiere.model.Query;
 import org.compiere.util.Env;
 import org.compiere.util.KeyNamePair;
 import org.compiere.util.Language;
+import org.compiere.util.CLogger;
 import org.compiere.util.Login;
 import org.compiere.util.Msg;
 import org.compiere.util.Util;
@@ -71,12 +76,16 @@ import com.auth0.jwt.interfaces.DecodedJWT;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.trekglobal.idempiere.rest.api.json.RestUtils;
+import com.trekglobal.idempiere.rest.api.model.MOIDCService;
 import com.trekglobal.idempiere.rest.api.model.MRefreshToken;
 import com.trekglobal.idempiere.rest.api.util.ErrorBuilder;
 import com.trekglobal.idempiere.rest.api.v1.auth.AuthService;
 import com.trekglobal.idempiere.rest.api.v1.auth.LoginCredential;
 import com.trekglobal.idempiere.rest.api.v1.auth.LoginParameters;
 import com.trekglobal.idempiere.rest.api.v1.auth.LogoutParameters;
+import com.trekglobal.idempiere.rest.api.v1.auth.PasswordResetCompletion;
+import com.trekglobal.idempiere.rest.api.v1.auth.PasswordResetRequest;
+import com.trekglobal.idempiere.rest.api.v1.auth.PasswordResetVerification;
 import com.trekglobal.idempiere.rest.api.v1.auth.RefreshParameters;
 import com.trekglobal.idempiere.rest.api.v1.auth.filter.RequestFilter;
 import com.trekglobal.idempiere.rest.api.v1.jwt.LoginClaims;
@@ -88,7 +97,12 @@ import com.trekglobal.idempiere.rest.api.v1.jwt.TokenUtils;
  */
 public class AuthServiceImpl implements AuthService {
 
+	private static final CLogger log = CLogger.getCLogger(AuthServiceImpl.class);
+
 	private static LogAuthFailure logAuthFailure = new LogAuthFailure();
+
+	/** HTTP 429 Too Many Requests (not in the JAX-RS Response.Status enum) */
+	private static final int SC_TOO_MANY_REQUESTS = 429;
 
 	public static final String ROLE_TYPES_WEBSERVICE = "NULL,WS";  //webservice+null
 
@@ -494,8 +508,13 @@ public class AuthServiceImpl implements AuthService {
 		int clientId = -1;
 		if (Pattern.matches("\\d+", s.trim())) {
 			clientId = Integer.parseInt(s.trim());
-			if (MClient.get(clientId).get_ID() == clientId)
-				return clientId;
+			try {
+				PO.setCrossTenantSafe();
+				if (MClient.get(clientId).get_ID() == clientId)
+					return clientId;
+			} finally {
+				PO.clearCrossTenantSafe();
+			}
 		}
 		Query query = new Query(Env.getCtx(), MClient.Table_Name, "IsActive='Y' AND Value=?", null);
 		clientId = query.setParameters(s.trim()).firstId();
@@ -524,9 +543,9 @@ public class AuthServiceImpl implements AuthService {
 			if (MOrg.get(orgId) != null)
 				return orgId;
 		}
-		Query query = new Query(Env.getCtx(), MOrg.Table_Name, "AD_Client_ID=? AND IsActive='Y' AND Name=?", null);
+		Query query = new Query(Env.getCtx(), MOrg.Table_Name, "AD_Client_ID=? AND IsActive='Y' AND (Name=? OR Value=?)", null);
 		try {
-			orgId = query.setParameters(clientId, s.trim()).firstIdOnly();
+			orgId = query.setParameters(clientId, s.trim(), s.trim()).firstIdOnly();
 		} catch (Exception e) {
 			return -3;
 		}
@@ -586,8 +605,8 @@ public class AuthServiceImpl implements AuthService {
 			if (warehouseId == 0 || MWarehouse.get(warehouseId) != null)
 				return warehouseId;
 		}
-		Query query = new Query(Env.getCtx(), MOrg.Table_Name, "AD_Client_ID=? AND IsActive='Y' AND Name=?", null);
-		warehouseId = query.setParameters(clientId, s.trim()).firstId();
+		Query query = new Query(Env.getCtx(), MWarehouse.Table_Name, "AD_Client_ID=? AND IsActive='Y' AND (Name=? OR Value=?)", null);
+		warehouseId = query.setParameters(clientId, s.trim(), s.trim()).firstId();
 		if (warehouseId == -1) {
 			return -2;
 		} else {
@@ -942,6 +961,15 @@ public class AuthServiceImpl implements AuthService {
 	@Override
 	public Response tokenLogout(LogoutParameters logout) {
 		String token = logout.getToken();
+		
+		// check if this is an oAuth/OIDC token
+		if (MOIDCService.revokeToken(token)) {
+			JsonObject okResponse = new JsonObject();
+			okResponse.addProperty("summary", "OK");
+			
+			return Response.ok(okResponse.toString()).build();
+		}
+		
 		Algorithm algorithm = Algorithm.HMAC512(TokenUtils.getTokenSecret());
 		JWTVerifier verifier = JWT.require(algorithm)
 		        .withIssuer(TokenUtils.getTokenIssuer())
@@ -974,6 +1002,7 @@ public class AuthServiceImpl implements AuthService {
 		}
 		Env.setContext(Env.getCtx(), Env.AD_SESSION_ID, sessionId);
 		MSession session = new MSession(Env.getCtx(), sessionId, null);
+		session.setWebSession(session.getWebSession() + "-logout");
 		session.logout();
 		RestUtils.removeSavedCtx(sessionId);
 
@@ -985,6 +1014,112 @@ public class AuthServiceImpl implements AuthService {
 		return Response.ok(okResponse.toString()).build();
 	}
 	
+	/* (non-Javadoc)
+	 * @see com.trekglobal.idempiere.rest.api.v1.auth.AuthService#requestPasswordReset(PasswordResetRequest)
+	 */
+	@Override
+	public Response requestPasswordReset(PasswordResetRequest request) {
+		if (request == null || Util.isEmpty(request.getEmail(), true))
+			return passwordResetBadRequest(Msg.getMsg(Env.getCtx(), "FillMandatory") + " " + Msg.getMsg(Env.getCtx(), "EMail"));
+		ensureResetContext();
+		IPasswordResetService service = Core.getPasswordResetService();
+		try {
+			// client 0: the caller is pre-login and does not know the tenant (mirrors the ZK panel)
+			service.requestReset(request.getEmail(), 0, request.getLanguage() != null ? request.getLanguage() : null);
+		} catch (AdempiereException e) {
+			// the only enumeration-safe failure to surface is the rate limit, which the service
+			// raises for registered and unknown emails alike (via the in-memory decoy)
+			if (Msg.getMsg(Env.getCtx(), "PasswordResetTooManyRequests").equals(e.getLocalizedMessage())) {
+				// ErrorBuilder.status() only accepts the JAX-RS Status enum (no 429), so the numeric
+				// code is carried by the HTTP response only; the body keeps title + detail
+				return Response.status(SC_TOO_MANY_REQUESTS)
+						.entity(new ErrorBuilder()
+								.title("Password reset error").append(e.getLocalizedMessage()).build().toString())
+						.build();
+			}
+			// any other failure (e.g. mail send error) is reachable only for a real address, so it
+			// would leak account existence - swallow it to the same neutral response, logging server-side
+			if (log.isLoggable(Level.WARNING)) log.log(Level.WARNING, "Password reset request failed", e);
+		}
+		// always neutral: identical response whether or not the account exists
+		JsonObject json = new JsonObject();
+		json.addProperty("summary", Msg.getMsg(Env.getCtx(), "PasswordResetCodeSent"));
+		return Response.ok(json.toString()).build();
+	}
+
+	/* (non-Javadoc)
+	 * @see com.trekglobal.idempiere.rest.api.v1.auth.AuthService#verifyPasswordResetCode(PasswordResetVerification)
+	 */
+	@Override
+	public Response verifyPasswordResetCode(PasswordResetVerification verification) {
+		if (verification == null || Util.isEmpty(verification.getEmail(), true)
+				|| Util.isEmpty(verification.getCode(), true))
+			return passwordResetBadRequest(Msg.getMsg(Env.getCtx(), "FillMandatory"));
+		ensureResetContext();
+		IPasswordResetService service = Core.getPasswordResetService();
+		try {
+			String verifiedToken = service.verifyCode(verification.getEmail(), verification.getCode());
+			JsonObject json = new JsonObject();
+			json.addProperty("verifiedToken", verifiedToken);
+			return Response.ok(json.toString()).build();
+		} catch (AdempiereException e) {
+			// single status/body for every failure (invalid / expired / attempts exceeded); the service
+			// already equalizes the messages so this cannot distinguish registered from unknown emails
+			return passwordResetError(e);
+		}
+	}
+
+	/* (non-Javadoc)
+	 * @see com.trekglobal.idempiere.rest.api.v1.auth.AuthService#completePasswordReset(PasswordResetCompletion)
+	 */
+	@Override
+	public Response completePasswordReset(PasswordResetCompletion completion) {
+		if (completion == null || Util.isEmpty(completion.getVerifiedToken(), true)
+				|| Util.isEmpty(completion.getNewPassword(), false))
+			return passwordResetBadRequest(Msg.getMsg(Env.getCtx(), "FillMandatory") + " " + Msg.getMsg(Env.getCtx(), "New Password"));
+		ensureResetContext();
+		IPasswordResetService service = Core.getPasswordResetService();
+		try {
+			service.completeReset(completion.getVerifiedToken(), completion.getNewPassword());
+			JsonObject json = new JsonObject();
+			json.addProperty("summary", Msg.getMsg(Env.getCtx(), "PasswordResetSuccess"));
+			return Response.ok(json.toString()).build();
+		} catch (AdempiereException e) {
+			// invalid/expired token, or password-policy violation (e.g. NewPasswordMustDiffer)
+			return passwordResetError(e);
+		}
+	}
+
+	/**
+	 * The password-reset endpoints are unauthenticated, so {@code RequestFilter} leaves the thread
+	 * context empty. Seed a minimal System (client 0) context so the reset token PO saves have a valid
+	 * context (otherwise {@code PO.checkValidContext} throws "Context lost"). This mirrors the ZK login
+	 * panel, which also drives the reset under client 0 at the login screen.
+	 */
+	private void ensureResetContext() {
+		Env.setContext(Env.getCtx(), Env.AD_CLIENT_ID, 0);
+		Env.setContext(Env.getCtx(), Env.AD_ORG_ID, 0);
+	}
+
+	/**
+	 * @param e the reset failure
+	 * @return a uniform 400 error carrying the (already enumeration-safe) message
+	 */
+	private Response passwordResetError(AdempiereException e) {
+		return passwordResetBadRequest(e.getLocalizedMessage());
+	}
+
+	/**
+	 * @param detail human-readable error detail
+	 * @return a uniform 400 Bad Request with the standard error envelope
+	 */
+	private Response passwordResetBadRequest(String detail) {
+		return Response.status(Status.BAD_REQUEST)
+				.entity(new ErrorBuilder().status(Status.BAD_REQUEST)
+						.title("Password reset error").append(detail).build().toString())
+				.build();
+	}
+
 	public void setRequest(HttpServletRequest request) {
 	    this.request = request;
 	}

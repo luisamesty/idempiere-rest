@@ -36,12 +36,14 @@ import javax.ws.rs.container.ContainerRequestContext;
 import javax.ws.rs.container.ContainerRequestFilter;
 import javax.ws.rs.core.HttpHeaders;
 import javax.ws.rs.core.Response;
+import javax.ws.rs.core.Response.Status;
 import javax.ws.rs.ext.Provider;
 
 import org.adempiere.util.ServerContext;
 import org.compiere.model.MClient;
 import org.compiere.model.MRole;
 import org.compiere.model.MSession;
+import org.compiere.model.MSysConfig;
 import org.compiere.model.MUser;
 import org.compiere.util.DB;
 import org.compiere.util.Env;
@@ -55,6 +57,7 @@ import com.auth0.jwt.algorithms.Algorithm;
 import com.auth0.jwt.exceptions.JWTVerificationException;
 import com.auth0.jwt.interfaces.Claim;
 import com.auth0.jwt.interfaces.DecodedJWT;
+import com.trekglobal.idempiere.rest.api.json.ResponseUtils;
 import com.trekglobal.idempiere.rest.api.json.RestUtils;
 import com.trekglobal.idempiere.rest.api.model.MAuthToken;
 import com.trekglobal.idempiere.rest.api.model.MOIDCService;
@@ -71,6 +74,8 @@ import com.trekglobal.idempiere.rest.api.v1.jwt.TokenUtils;
  *
  */
 public class RequestFilter implements ContainerRequestFilter {
+	// optional health monitoring key (AD_SysConfig.Name=REST_HEALTH_MONITORING_KEY)
+	private static final String REST_HEALTH_MONITORING_KEY = "REST_HEALTH_MONITORING_KEY";
 	public static final String LOGIN_NAME = "#LoginName";
 	public static final String LOGIN_CLIENTS = "#LoginClients";
 
@@ -95,7 +100,37 @@ public class RequestFilter implements ContainerRequestFilter {
 			|| (   HttpMethod.POST.equals(requestContext.getMethod())
 					&& requestContext.getUriInfo().getPath().endsWith("v1/auth/logout")
 					)
+			|| (   HttpMethod.POST.equals(requestContext.getMethod())
+					&& isInboundWebhookPath(requestContext.getUriInfo().getPath())
+					)
+			|| (   HttpMethod.POST.equals(requestContext.getMethod())
+					&& requestContext.getUriInfo().getPath().endsWith("v1/auth/password-reset/request")
+					)
+			|| (   HttpMethod.POST.equals(requestContext.getMethod())
+					&& requestContext.getUriInfo().getPath().endsWith("v1/auth/password-reset/verify")
+					)
+			|| (   HttpMethod.POST.equals(requestContext.getMethod())
+					&& requestContext.getUriInfo().getPath().endsWith("v1/auth/password-reset/complete")
+					)
 			) {
+			return;
+		}
+		
+		if (HttpMethod.GET.equals(requestContext.getMethod())
+			 && requestContext.getUriInfo().getPath().endsWith("v1/health"))
+		{
+			String healthMonitoringKey = MSysConfig.getValue(REST_HEALTH_MONITORING_KEY, "");
+			if (!Util.isEmpty(healthMonitoringKey)) {
+				String healthMonitoringValue = requestContext.getUriInfo().getQueryParameters().getFirst("key");
+				if (Util.isEmpty(healthMonitoringValue) || !healthMonitoringValue.equals(healthMonitoringKey)) {
+					requestContext.abortWith(Response.status(Response.Status.UNAUTHORIZED).build());					
+				}
+			}
+			return;
+		}
+		
+		if (PresignedURL.isPresignedURL(requestContext)) {
+			PresignedURL.validateSignature(requestContext);
 			return;
 		}
 		
@@ -126,8 +161,8 @@ public class RequestFilter implements ContainerRequestFilter {
 					}
 				}
 			} catch (JWTVerificationException ex) {
-				ex.printStackTrace();
-				requestContext.abortWith(Response.status(Response.Status.UNAUTHORIZED).build());
+				ex.printStackTrace();				
+				requestContext.abortWith(ResponseUtils.getResponseError(Status.UNAUTHORIZED, ex.getLocalizedMessage(), "", ""));
 			} catch (Exception ex) {
 				ex.printStackTrace();
 				requestContext.abortWith(Response.status(Response.Status.INTERNAL_SERVER_ERROR).build());
@@ -184,6 +219,8 @@ public class RequestFilter implements ContainerRequestFilter {
 			if (!user.isActive())
 				throw new JWTVerificationException("User is inactive");
 			Env.setContext(Env.getCtx(), Env.AD_USER_ID, claim.asInt());
+			Env.setContext(Env.getCtx(), Env.AD_USER_NAME, user.getName() );
+			Env.setContext(Env.getCtx(), Env.SALESREP_ID, claim.asInt());
 		}
 		claim = jwt.getClaim(LoginClaims.AD_Role_ID.name());
 		int AD_Role_ID = 0;
@@ -217,7 +254,14 @@ public class RequestFilter implements ContainerRequestFilter {
 			AD_Session_ID = claim.asInt();
 			Env.setContext(Env.getCtx(), Env.AD_SESSION_ID, AD_Session_ID);
 			MSession session = MSession.get(Env.getCtx());
+			if (session == null)
+				throw new JWTVerificationException("Invalid session claim");
 			if (session.isProcessed()) {
+				if (session.getWebSession().endsWith("-logout")) {
+					// session was logged out
+					requestContext.abortWith(Response.status(Response.Status.UNAUTHORIZED).build());
+					return;
+				}
 				// is possible that the session was finished in a reboot instead of a logout
 				// if there is a REST_AuthToken or a REST_RefreshToken, then the user has not logged out
 				MAuthToken authToken = MAuthToken.get(Env.getCtx(), token);
@@ -234,6 +278,16 @@ public class RequestFilter implements ContainerRequestFilter {
 				throw new JWTVerificationException(errorMessage);
 		}
 		RestUtils.setSessionContextVariables(Env.getCtx());
+	}
+
+	private static boolean isInboundWebhookPath(String path) {
+		if (path == null)
+			return false;
+		String prefix = "v1/webhooks/";
+		if (!path.startsWith(prefix))
+			return false;
+		String remainder = path.substring(prefix.length());
+		return !remainder.isEmpty() && remainder.indexOf('/') < 0;
 	}
 
 }
