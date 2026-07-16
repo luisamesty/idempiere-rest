@@ -227,6 +227,16 @@ public class ViewResourceImpl implements ViewResource {
 	}
 
 	@Override
+	public Response getArchives(String tableName, String id) {
+		return restView().getArchives(tableName, id);
+	}
+
+	@Override
+	public Response getArchiveEntry(String tableName, String id, int archiveId, String asJson) {
+		return restView().getArchiveEntry(tableName, id, archiveId, asJson);
+	}
+
+	@Override
 	public Response printModelRecord(String tableName, String id, String reportType) {
 		return restView().printModelRecord(tableName, id, reportType);
 	}
@@ -246,6 +256,8 @@ public class ViewResourceImpl implements ViewResource {
 		header.append("components:\n");
 		YAMLSchema.addSecuritySchema(header);
 		YAMLSchema.addPredefinedParameters(header);
+		header.append(" ".repeat(2)).append("responses:\n");
+		YAMLSchema.addPredefinedResponses(header);
 		header.append(" ".repeat(2)).append("schemas:\n");
 		
 		StringBuilder body = new StringBuilder();		

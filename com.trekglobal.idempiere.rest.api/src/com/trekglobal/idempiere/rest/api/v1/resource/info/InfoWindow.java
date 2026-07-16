@@ -57,7 +57,9 @@ import org.compiere.util.DisplayType;
 import org.compiere.util.Env;
 import org.compiere.util.KeyNamePair;
 import org.compiere.util.Msg;
+import org.compiere.util.Util;
 import org.compiere.util.ValueNamePair;
+import org.idempiere.db.util.SQLFragment;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -90,8 +92,6 @@ public class InfoWindow {
 	private String tableName;
 	private Map<String, JsonElement> queryParameters;
 	private boolean useAnd;
-	private List<Object> statementParameters = null;
-	private List<MInfoColumn> statementParameterColumns = null;
 	
 	/**
 	 * 
@@ -100,9 +100,8 @@ public class InfoWindow {
 	 * @param orderBy
 	 * @param and
 	 */
-	public InfoWindow(MInfoWindow iw, String whereClause, String orderBy, boolean and) {
+	public InfoWindow(MInfoWindow iw, String orderBy, boolean and) {
 		infoWindowModel = iw; 
-		p_whereClause = whereClause;
 		p_orderBy = orderBy;
 		useAnd = and;
 		loadInfoDefinition();
@@ -211,8 +210,10 @@ public class InfoWindow {
 				
 		columnInfos = list;
 		
+		validateOrderByParameter(); 
+		
 		prepareQuery(list.toArray(new ColumnInfo[0]), infoWindowModel.getFromClause(), p_whereClause, 
-				p_orderBy != null ? p_orderBy : infoWindowModel.getOrderByClause());		
+				p_orderBy != null ? p_orderBy : infoWindowModel.getOrderByClause());
 	}
 	
 	private ColumnInfo toColumnInfo(MInfoColumn infoColumn, GridField gridField) {
@@ -417,9 +418,10 @@ public class InfoWindow {
 		
 	}
 	
-	private String buildQuerySQL(int start, int end) {
+	private SQLFragment buildQuerySQL(int start, int end) {
 		String dataSql;
-		String dynWhere = getSQLWhere();
+		SQLFragment dynFilter = getSQLFilter();
+		String dynWhere = dynFilter.sqlClause();
         StringBuilder sql = new StringBuilder (m_sqlMain);
         if (dynWhere.length() > 0)
             sql.append(dynWhere);   //  includes first AND
@@ -428,6 +430,10 @@ public class InfoWindow {
         	int index = sql.lastIndexOf(" WHERE");
         	sql.delete(index, sql.length());
         }
+        
+        if (!Util.isEmpty(m_sqlOrder, true)) {
+			sql.append(m_sqlOrder);
+		}
         
         dataSql = Msg.parseTranslation(Env.getCtx(), sql.toString());    //  Variables
         String alias = tableName;
@@ -441,10 +447,10 @@ public class InfoWindow {
         	dataSql = DB.getDatabase().addPagingSQL(dataSql, start, end);
         }
                 
-		return dataSql;
+        return new SQLFragment(dataSql, dynFilter.parameters());
 	}
 	
-	private String getSQLWhere() {
+	private SQLFragment getSQLFilter() {
 		StringBuilder builder = new StringBuilder();
 		MTable table = MTable.get(Env.getCtx(), tableName);
 		if (table.getColumnIndex("IsActive") >=0 ) {
@@ -454,8 +460,7 @@ public class InfoWindow {
 			builder.append(tableInfos[0].getSynonym()).append(".IsActive='Y'");
 		}
 		int count = 0;
-		statementParameters = new ArrayList<Object>();
-		statementParameterColumns = new ArrayList<MInfoColumn>();
+		List<Object> statementParameters = new ArrayList<Object>();
 		for(Entry<String, JsonElement> entries : queryParameters.entrySet()) {
 			String name = entries.getKey();
 			for(GridField gridField : gridFields) {
@@ -493,21 +498,30 @@ public class InfoWindow {
 						if (column.indexOf(".") > 0)
 							column = column.substring(column.indexOf(".")+1);
 						int cnt = DB.getSQLValueEx(null, "SELECT Count(*) From AD_Column WHERE IsActive='Y' AND AD_Client_ID=0 AND Upper(ColumnName)=? AND AD_Reference_ID=?", column.toUpperCase(), DisplayType.ChosenMultipleSelectionList);
-						if (cnt > 0)
-							builder.append(DB.intersectClauseForCSV(columnName, pString));
-						else
-							builder.append(DB.inClauseForCSV(columnName, pString));
+						if (cnt > 0) {
+							SQLFragment filter = DB.intersectFilterForCSV(columnName, pString);
+							builder.append(filter.sqlClause());
+							statementParameters.addAll(filter.parameters());
+						} else {
+							SQLFragment filter = DB.inFilterForCSV(columnName, pString);
+							builder.append(filter.sqlClause());
+							statementParameters.addAll(filter.parameters());
+						}
 					} 
 					else if (mInfoColumn.getAD_Reference_ID() == DisplayType.ChosenMultipleSelectionTable || mInfoColumn.getAD_Reference_ID() == DisplayType.ChosenMultipleSelectionSearch)
 					{
 						String pString = value.toString();
 						if (columnName.endsWith("_ID"))
 						{						
-							builder.append(DB.inClauseForCSV(columnName, pString));
+							SQLFragment filter = DB.inFilterForCSV(columnName, pString);
+							builder.append(filter.sqlClause());
+							statementParameters.addAll(filter.parameters());
 						}
 						else
 						{
-							builder.append(DB.intersectClauseForCSV(columnName, pString));
+							SQLFragment filter = DB.intersectFilterForCSV(columnName, pString);
+							builder.append(filter.sqlClause());
+							statementParameters.addAll(filter.parameters());
 						}
 					}
 					else
@@ -539,8 +553,7 @@ public class InfoWindow {
 						} else {
 							builder.append(" ?");
 						}
-						statementParameters.add(value);
-						statementParameterColumns.add(mInfoColumn);
+						statementParameters.add(toParameterValue(value, mInfoColumn.getQueryOperator()));
 					}
 					break;
 				}
@@ -551,10 +564,120 @@ public class InfoWindow {
 		}
 		String sql = builder.toString();
 		if (sql.indexOf("@") >= 0) {
+			String preParse = sql;
+			List<Object> parameters = new ArrayList<Object>();
 			sql = Env.parseContext(Env.getCtx(), 0, sql, true, true);
+			sql = Env.parseContextForSql(Env.getCtx(), 0, sql, true, true, parameters);
+			if (parameters.size() > 0) {
+				if (statementParameters.size() > 0) {
+					statementParameters = Env.mergeParameters(preParse, sql, statementParameters.toArray(), parameters.toArray());
+				} else {
+					statementParameters = parameters;
+				}
+			}
 		}
 		
-		return sql;
+		return new SQLFragment(sql, statementParameters);
+	}
+	
+	/**
+	 * Validates the ORDER BY parameter against info columns and transforms column names to their SQL select clauses.
+	 * <p>
+	 * This method checks if p_orderBy contains valid column names that exist in the infoColumns array.
+	 * It supports multiple formats:
+	 * <ul>
+	 * <li>Single column: "name"</li>
+	 * <li>Single column with sort direction: "name desc"</li>
+	 * <li>Multiple columns: "name,value"</li>
+	 * <li>Multiple columns with sort directions: "name, value desc"</li>
+	 * </ul>
+	 * </p>
+	 * <p>
+	 * If validation succeeds, p_orderBy is modified to contain the SQL select clauses instead of column names.
+	 * If any column name is invalid, p_orderBy is set to null and the method returns false.
+	 * Sort directions are validated to prevent SQL injection (only ASC and DESC are allowed).
+	 * </p>
+	 * 
+	 * @return true if p_orderBy is valid and was successfully transformed, false if invalid or empty
+	 */
+	private boolean validateOrderByParameter() {
+		if (!Util.isEmpty(p_orderBy, true)) {
+			String orderByClause = p_orderBy.trim();
+			
+			// Split by comma to handle multiple columns (e.g., "name, value desc")
+			String[] orderByParts = orderByClause.split(",");
+			StringBuilder validatedOrderBy = new StringBuilder();
+			
+			for (String part : orderByParts) {
+				part = part.trim();
+				if (part.isEmpty()) {
+					continue;
+				}
+				
+				// Extract column name and sort direction (ASC/DESC)
+				String columnName = part;
+				String sortDirection = "";
+				int spaceIndex = part.indexOf(' ');
+				if (spaceIndex > 0) {
+					columnName = part.substring(0, spaceIndex).trim();
+					String rawDirection = part.substring(spaceIndex).trim();
+					
+					// Validate sort direction to prevent SQL injection
+					if (!rawDirection.isEmpty()) {
+						String upperDirection = rawDirection.toUpperCase();
+						if ("ASC".equals(upperDirection) || "DESC".equals(upperDirection)) {
+							sortDirection = " " + upperDirection;
+						} else {
+							// Invalid sort direction - potential SQL injection attempt
+							p_orderBy = null;
+							log.log(Level.WARNING, "Invalid sort direction in order by clause: " + rawDirection);
+							return false;
+						}
+					}
+				}
+
+				// Check if the column name matches any info column
+				boolean found = false;
+				for (MInfoColumn infoColumn : infoColumns) {
+					
+					// Only consider displayed columns for ORDER BY - same as in UI
+					if (!infoColumn.isDisplayed(Env.getCtx(), 0)) {
+						continue;
+					}
+					
+					if (infoColumn.getColumnName().equalsIgnoreCase(columnName)) {
+						String selectClause = infoColumn.getSelectClause();
+						// Remove any AS clause from select clause for ORDER BY
+						int asIndex = selectClause.toUpperCase().lastIndexOf(" AS ");
+						if (asIndex > 0) {
+							selectClause = selectClause.substring(0, asIndex).trim();
+						}
+						
+						// Append to the validated ORDER BY clause
+						if (validatedOrderBy.length() > 0) {
+							validatedOrderBy.append(", ");
+						}
+						validatedOrderBy.append(selectClause).append(sortDirection);
+						found = true;
+						break;
+					}
+				}
+				
+				// If any column is invalid, return false
+				if (!found) {
+					p_orderBy = null;
+					log.log(Level.WARNING, "Invalid column name in order by clause: " + columnName);
+					return false;
+				}
+			}
+			
+			// Set the validated ORDER BY clause
+			p_orderBy = validatedOrderBy.length() > 0 ? validatedOrderBy.toString() : null;
+			return p_orderBy != null;
+		}
+		
+		p_orderBy = null;
+		return false;
 	}
 
 	private MInfoColumn findInfoColumn(GridField gridField) {
@@ -597,13 +720,12 @@ public class InfoWindow {
 		int pagesToSkip = pageNo - 1;
 		int start = (pageSize*pagesToSkip) + 1;
 		int end = (pageSize * (pagesToSkip+1)) + 1;
-		String sql = buildQuerySQL(start, end);
+		SQLFragment sql = buildQuerySQL(start, end);
 		JsonArray array = new JsonArray();
-		try (PreparedStatement pstmt = DB.prepareStatement(sql, null)) {
-			for(int i = 0; i < statementParameters.size(); i++) {
-				Object value = statementParameters.get(i);
-				MInfoColumn infoColumn = statementParameterColumns.get(i);
-				setParameter(pstmt, i+1, value, infoColumn.getQueryOperator());
+		try (PreparedStatement pstmt = DB.prepareStatement(sql.sqlClause(), null)) {
+			for(int i = 0; i < sql.parameters().size(); i++) {
+				Object value = sql.parameters().get(i);
+				setParameter(pstmt, i+1, value);
 			}
 			pstmt.setQueryTimeout(defaultQueryTimeout);			
 			ResultSet rs = pstmt.executeQuery();
@@ -659,13 +781,20 @@ public class InfoWindow {
 	 * @param pstmt
 	 * @param parameterIndex
 	 * @param value
-	 * @param queryOperator
 	 * @throws SQLException
 	 */
-	private void setParameter (PreparedStatement pstmt, int parameterIndex, Object value, String queryOperator) throws SQLException {
+	private void setParameter (PreparedStatement pstmt, int parameterIndex, Object value) throws SQLException {
 		if (value instanceof Boolean) {					
 			pstmt.setString(parameterIndex, ((Boolean) value).booleanValue() ? "Y" : "N");
-		} else if (value instanceof String) {
+		} else if (value instanceof String valueStr) {
+			pstmt.setString(parameterIndex, valueStr);
+		} else {
+			pstmt.setObject(parameterIndex, value);
+		}
+	}
+	
+	private Object toParameterValue(Object value, String queryOperator) {
+		if (value instanceof String) {
 			StringBuilder valueStr = new StringBuilder(value.toString());
 			if (queryOperator.equals(X_AD_InfoColumn.QUERYOPERATOR_Like)) {
 				if (!valueStr.toString().endsWith("%"))
@@ -676,9 +805,8 @@ public class InfoWindow {
 				if (!valueStr.toString().endsWith("%"))
 					valueStr.append("%");
 			}
-			pstmt.setString(parameterIndex, valueStr.toString());
-		} else {
-			pstmt.setObject(parameterIndex, value);
+			return valueStr.toString();
 		}
+		return value;
 	}
 }

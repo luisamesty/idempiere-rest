@@ -52,6 +52,10 @@ tags:
     description: Endpoints to get menu tree
   - name: Uploads
     description: Endpoints to upload files
+  - name: Batch
+    description: Endpoints for batch processing
+  - name: Health
+    description: Endpoints for health monitoring
 components:
   securitySchemes:
     bearerAuth: # arbitrary name for the security scheme
@@ -170,8 +174,7 @@ components:
           description: returns the values of the assigned label column
         showLabelColumnList:
           value: 'Name,Description'
-          description: returns a list of assigned label objects, including the column list only
-    
+          description: returns a list of assigned label objects, including the column list only 
   responses:
     NotFound:
       description: The specified resource was not found
@@ -179,12 +182,24 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            not_found:
+              value:
+                title: "Not Found"
+                status: 404
+                detail: "The specified resource was not found"
     ServerError:
-      description: Unexpected error
+      description: Internal Server Error. Unhandled exceptions.
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            internal_server_error:
+              value:
+                title: "Internal Server Error"
+                status: 500
+                detail: "Internal server error. Unhandled exceptions."
     BinaryResponse:
       description: Successful response
       content:
@@ -192,6 +207,114 @@ components:
           schema:
             type: string
             format: binary
+    BadQueryRecordsRequest:
+      description: Bad Request. Malformed query filter syntax.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            invalid_query_filter:
+              value:
+                title: "Bad Query Records Request"
+                status: 400
+                detail: "Invalid query filter syntax."
+    ForbiddenQueryRecordsRequest:
+      description: Forbidden. Access to this specific record instance is restricted.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            forbidden_query_records:
+              value:
+                title: "Access denied"
+                status: 403
+                detail: "Access denied for table: Products"
+    NotImplementedQueryMethod:
+      description: Not Implemented. The query method is not implemented for this resource.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            not_implemented_query_method:
+              value:
+                title: "GET Error"
+                status: 501
+                detail: "Method call xyz not implemented"
+    BadCreateRecordRequest:
+      description: Bad Request. Validation failure (Missing mandatory fields, invalid field names, or read-only violations).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            invalid_create_record:
+              value:
+                title: "Validation Errors"
+                status: 400
+                detail: "Fill mandatory fields: Name, Description"
+    ForbiddenCreateRecordRequest:
+      description: Forbidden. Security violation (Tenant mismatch or no Create access).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            invalid_create_record:
+              value:
+                title: "Access denied"
+                status: 403
+                detail: "Access denied for table: Products"
+    ForbiddenGetRecordRequest:
+      description: Forbidden. Access to this specific record instance is restricted.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            invalid_get_record:
+              value:
+                title: "Access denied"
+                status: 403
+                detail: "Access denied for table: Products"
+    BadUpdateRecordRequest:
+      description: Bad Request. Validation failure (Missing mandatory fields, invalid field names, or read-only violations).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            invalid_update_record:
+              value:
+                title: "Validation Errors"
+                status: 400
+                detail: "Fill mandatory fields: Name, Description"
+    ForbiddenUpdateRecordRequest:
+      description: Forbidden. Current user role lacks update access to the table.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            invalid_update_record:
+              value:
+                title: "Update error"
+                status: 403
+                detail: "Role does not have access"
+    ForbiddenDeleteRecordRequest:
+      description: Forbidden. Role lacks "Delete" permission for the table.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            invalid_delete_record:
+              value:
+                title: "Security Violation"
+                status: 403
+                detail: "No delete access"
   schemas:
     AuthenticationParameters:
       description: authentication parameters
@@ -293,15 +416,12 @@ components:
         title:
           type: string
           description: error summary
-          example: Save error
         status:
           type: integer
           description: http status code
-          example: 500
         detail:
           type: string
           description: error details
-          example: 'Could not save record - Require unique data'
     Models:
       type: object
       properties:
@@ -344,6 +464,39 @@ components:
                 description: attachment content type
                 example: image/png
       description: An array of attachment entries
+    Archives:
+      type: object
+      properties:
+        archives:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+                description: AD_Archive_ID of the archive entry
+                example: 1000123
+              name:
+                type: string
+                description: archive name
+                example: Invoice_1000045.pdf
+              contentType:
+                type: string
+                description: archive content type
+                example: application/pdf
+              isReport:
+                type: boolean
+                description: true when the archive was produced by a report/print
+                example: true
+              processId:
+                type: integer
+                description: AD_Process_ID that generated the archive (omitted when not set)
+                example: 110
+              created:
+                type: string
+                description: timestamp the archive was created
+                example: '2026-06-19 09:00:00.0'
+      description: An array of archive entries, most recent first
     TabField:
       description: tab field description
       type: object
@@ -3042,6 +3195,11 @@ components:
         sha256:
           type: integer
           description: SHA-256 hash of file
+        uploadLocation:
+          $ref: '#/components/schemas/UploadLocation'
+        expiresInSeconds:
+          type: integer
+          description: number of seconds before upload session expires, default is 86400 seconds (24 hour)
     UploadInitiationResponse:
       type: object
       properties:
@@ -3055,6 +3213,9 @@ components:
           type: string
           format: date-time
           description: expire timestamp of upload session
+        presignedURL:
+          type: string
+          description: presigned URL for uploading file chunks
     UploadChunkResponse:
       type: object
       properties:
@@ -3070,6 +3231,9 @@ components:
         message:
           type: integer
           description: response message
+        isLastChunk:
+          type: boolean
+          description: true if this is the last chunk of the file that will trigger upload completion
     UploadedChunk:
       type: object
       properties:
@@ -3106,6 +3270,9 @@ components:
         fileSize:
           type: integer
           description: file size in bytes
+        imageId:
+          type: integer
+          description: image id if the upload location is image
         chunkSize:
           type: integer
           description: prefer chunk size
@@ -3121,28 +3288,9 @@ components:
         message:
           type: integer
           description: response message
-    UploadCompletionRequest:
-      type: object
-      properties:
-        fileName:
+        presignedURL:
           type: string
-          description: optional final file name to override the file name in initial upload request
-        totalChunks:
-          type: integer
-          description: number of chunk uploaded, for verification purpose
-        uploadLocation:
-          $ref: '#/components/schemas/UploadLocation'
-    UploadCompletionResponse:
-      type: object
-      properties:
-        uploadId:
-          type: string
-          description: uuid of REST_Upload record
-        status:
-          $ref: '#/components/schemas/UploadStatus'
-        message:
-          type: integer
-          description: response message
+          description: presigned URL to get upload status or uploaded file
     CopyUploadedFileRequest:
       type: object
       properties:
@@ -3180,8 +3328,84 @@ components:
         fileSize:
           type: integer
           description: size of the file being copied
+    SubRequest:
+      type: object
+      properties:
+        method:
+          type: string
+          description: HTTP method for the sub-request (e.g., GET, POST)
+        path:
+          type: string
+          description: Path for the sub-request (e.g., v1/models/C_BPartner)
+        body:
+          type: object
+          description: Body of the sub-request, if applicable
+    BatchRequest:
+      type: array
+      items:
+        $ref: '#/components/schemas/SubRequest'
+    BatchResponse:
+      type: array
+      items:
+        type: object
+        properties:
+          status:
+            type: string
+            description: HTTP status text of the sub-request (e.g., created, ok, etc)
+          statusCode:
+            type: integer
+            description: HTTP status code of the response
+          body:
+            type: object
+            description: Body of the response, if applicable
 security:
-    - bearerAuth: [] # use the same name as above          
+    - bearerAuth: [] # use the same name as above
+
+# The x-* below is for reference only    
+x-query-records-error-responses:
+  '400':
+    $ref: '#/components/responses/BadQueryRecordsRequest'
+  '403':
+    $ref: '#/components/responses/ForbiddenQueryRecordsRequest'
+  '404':
+    $ref: '#/components/responses/NotFound'
+  '500':
+    $ref: '#/components/responses/ServerError'
+  '501':
+    $ref: '#/components/responses/NotImplementedQueryMethod'
+x-create-record-error-responses:
+  '400':
+    $ref: '#/components/responses/BadCreateRecordRequest'
+  '403':
+    $ref: '#/components/responses/ForbiddenCreateRecordRequest'
+  '404':
+    $ref: '#/components/responses/NotFound'
+  '500':
+    $ref: '#/components/responses/ServerError'
+x-get-record-error-responses: 
+  '403':
+    $ref: '#/components/responses/ForbiddenGetRecordRequest'
+  '404':
+    $ref: '#/components/responses/NotFound'
+  '500':
+    $ref: '#/components/responses/ServerError'
+x-update-record-error-responses: 
+  '400':
+    $ref: '#/components/responses/BadUpdateRecordRequest'
+  '403':
+    $ref: '#/components/responses/ForbiddenUpdateRecordRequest'
+  '404':
+    $ref: '#/components/responses/NotFound'
+  '500':
+    $ref: '#/components/responses/ServerError'
+x-delete-record-error-responses: 
+  '403':
+    $ref: '#/components/responses/ForbiddenDeleteRecordRequest'
+  '404':
+    $ref: '#/components/responses/NotFound'
+  '500':
+    $ref: '#/components/responses/ServerError'
+    
 paths:
   /auth/tokens:
     post:
@@ -3293,7 +3517,7 @@ paths:
                     language: en_US
       responses:
         '200':
-          description: Successful response
+          description: OK. Credentials are valid; returns client list or full session token.
           content:
             application/json:
               schema:
@@ -3312,8 +3536,14 @@ paths:
                       - id: 11
                         name: GardenWorld
                     token: "eyJraWQiOiJpZ..."
+        '400':
+          description: Bad Request. Error during JWT creation or invalid data format in parameters.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '401':
-          description: authentication error
+          description: Unauthorized. Wrong password, account locked, or no access to the requested Client/Role/Org.
           content:
             application/json:
               schema:
@@ -3324,6 +3554,8 @@ paths:
                     title: 'Authenticate error'
                     status: 401
                     detail: 'Invalid User ID or Password'
+        '500':
+          $ref: '#/components/responses/ServerError'
     put:
       tags:
         - Authentication
@@ -3352,7 +3584,7 @@ paths:
                   language: en_US
       responses:
         '200':
-          description: Successful response
+          description: OK. Session context successfully updated; new token issued.
           content:
             application/json:
               schema:
@@ -3363,6 +3595,26 @@ paths:
                 menuTreeId: 10
                 token: "eyJraWQiOiJpZ..."
                 refresh_token: "eyJraWQiOiJpZ..."
+        '400':
+          description: Bad Request. Technical error during token generation or illegal arguments.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized. Permission denied for the requested Client/Role/Org, or parameters are missing/ambiguous.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalidUserNameOrPassword:
+                  value:
+                    title: 'Authenticate error'
+                    status: 401
+                    detail: 'Invalid User ID or Password'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /auth/refresh:
     post:
       tags:
@@ -3392,7 +3644,7 @@ paths:
               userId: 101
       responses:
         '200':
-          description: Successful response
+          description: OK. Token successfully rotated; returns new auth and refresh tokens.
           content:
             application/json:
               schema:
@@ -3409,6 +3661,26 @@ paths:
               example:
                 token: "eyJraWQiOiJpZ..."
                 refresh_token: "eyJraWQiOiJpZ..."
+        '400':
+          description: Bad Request. Technical error during the signing of the new JWT.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized. Token is invalid, expired, already used (reuse detection), or ownership verification failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalidUserNameOrPassword:
+                  value:
+                    title: 'Authenticate error'
+                    status: 401
+                    detail: 'Invalid User ID or Password'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /auth/logout:
     post:
       tags:
@@ -3425,7 +3697,7 @@ paths:
                   description: token from /auth/tokens or /auth/refresh call
       responses:
         '200':
-          description: Successful response
+          description: OK. Session successfully terminated and tokens invalidated.
           content:
             application/json:
               schema:
@@ -3434,6 +3706,163 @@ paths:
                   summary:
                     type: string
                     description: info or error message from server
+        '401':
+          description: Unauthorized. Token signature is invalid or malformed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalidUserNameOrPassword:
+                  value:
+                    title: 'Authenticate error'
+                    status: 401
+                    detail: 'Invalid User ID or Password'
+        '404':
+          description: Not Found. Token is valid but missing a session ID (not an active session token).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /auth/password-reset/request:
+    post:
+      tags:
+        - Authentication
+      summary: Password reset - request a one-time code
+      description: >-
+        First step of the code-based password reset. Emails a one-time numeric code to
+        the address. The response is always neutral: it never reveals whether the email
+        matches an account. Unauthenticated - no Authorization header required.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+              properties:
+                email:
+                  type: string
+                  description: Email / login of the account to reset
+                language:
+                  type: string
+                  description: Optional AD_Language for the email template (e.g. en_US)
+            example:
+              email: user@example.com
+              language: en_US
+      responses:
+        '200':
+          description: OK. Neutral confirmation, returned whether or not the account exists.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  summary:
+                    type: string
+                    description: Neutral confirmation message
+        '429':
+          description: Too Many Requests. The per-identifier request rate limit was exceeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /auth/password-reset/verify:
+    post:
+      tags:
+        - Authentication
+      summary: Password reset - verify the code
+      description: >-
+        Second step of the code-based password reset. Verifies the emailed code and, on
+        success, returns a short-lived single-use verified token. Unauthenticated.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - code
+              properties:
+                email:
+                  type: string
+                code:
+                  type: string
+                  description: The one-time code emailed to the address
+            example:
+              email: user@example.com
+              code: "123456"
+      responses:
+        '200':
+          description: OK. Code verified.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  verifiedToken:
+                    type: string
+                    description: Short-lived single-use token for /auth/password-reset/complete
+        '400':
+          description: >-
+            Bad Request. Invalid code, expired code, or too many attempts. The response is
+            uniform and does not reveal whether the email is registered.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /auth/password-reset/complete:
+    post:
+      tags:
+        - Authentication
+      summary: Password reset - set the new password
+      description: >-
+        Third step of the code-based password reset. Uses the verified token from the
+        verify step to set the new password; existing sessions for the account are
+        invalidated. Unauthenticated.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - verifiedToken
+                - newPassword
+              properties:
+                verifiedToken:
+                  type: string
+                  description: Token returned by /auth/password-reset/verify
+                newPassword:
+                  type: string
+            example:
+              verifiedToken: 3f9a0b7c...
+              newPassword: MyNewPassw0rd!
+      responses:
+        '200':
+          description: OK. Password changed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  summary:
+                    type: string
+        '400':
+          description: >-
+            Bad Request. Invalid or expired verified token, or the new password violates
+            the password policy.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /auth/jwk:
     get:
       tags:
@@ -3447,6 +3876,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/JWKS'
+        '400':
+          description: Bad Request. Configuration error preventing the algorithm initialization.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /auth/roles:
     get:
       tags:
@@ -3461,7 +3898,7 @@ paths:
           description: client id
       responses:
         '200':
-          description: Successful response
+          description: OK. Returns the list of authorized roles for the specified client.
           content:
             application/json:
               schema:
@@ -3480,6 +3917,26 @@ paths:
                           description: The name of the role.
                     description: An array of roles.
                 description: A collection of roles.
+        '400':
+          description: Bad Request. Illegal arguments or error in retrieving client/role information.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized. The user does not have access to the requested clientId.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalidUserNameOrPassword:
+                  value:
+                    title: 'Authenticate error'
+                    status: 401
+                    detail: 'Invalid User ID or Password'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /auth/organizations:
     get:
       tags:
@@ -3500,7 +3957,7 @@ paths:
           description: role id
       responses:
         '200':
-          description: Successful response
+          description: OK. Returns the list of authorized organizations for the specified client and role.
           content:
             application/json:
               schema:
@@ -3519,6 +3976,26 @@ paths:
                           description: The name of the organization.
                     description: An array of organization.
                 description: A collection of organization.
+        '400':
+          description: Bad Request. Illegal arguments or error in retrieving Client/User/Role information.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized. The user does not have access to the requested clientId or roleId.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalidUserNameOrPassword:
+                  value:
+                    title: 'Authenticate error'
+                    status: 401
+                    detail: 'Invalid User ID or Password'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /auth/warehouses:
     get:
       tags:
@@ -3545,7 +4022,7 @@ paths:
           description: organization id
       responses:
         '200':
-          description: Successful response
+          description: OK. Returns the list of authorized warehouses for the specified context.
           content:
             application/json:
               schema:
@@ -3564,6 +4041,26 @@ paths:
                           description: The name of the warehouse.
                     description: An array of warehouse.
                 description: A collection of warehouse.
+        '400':
+          description: Bad Request. Illegal arguments or error in retrieving context information.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized. The user does not have access to the requested clientId, roleId, or organizationId.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalidUserNameOrPassword:
+                  value:
+                    title: 'Authenticate error'
+                    status: 401
+                    detail: 'Invalid User ID or Password'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /auth/language:
     get:
       tags:
@@ -3578,7 +4075,7 @@ paths:
           description: client id
       responses:
         '200':
-          description: Successful response
+          description: OK. Returns the default language code for the specified client.
           content:
             application/json:
               schema:
@@ -3588,6 +4085,14 @@ paths:
                     type: string
                     description: language code
                     example: en_US
+        '400':
+          description: Bad Request. Invalid clientId or internal mapping error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /models:
     get:
       tags:
@@ -3597,11 +4102,25 @@ paths:
         - $ref: '#/components/parameters/filter'
       responses:
         '200':
-          description: Successful response
+          description: OK. Returns the list of models.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Models'
+        '400':
+          description: Bad Request. Syntax error in the $filter query parameter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalid_filter:
+                  value:
+                    title: 'GET Error'
+                    status: 400
+                    detail: 'Unsupported operator: xyz'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /models/{tableName}/yaml:
     get:
       tags:
@@ -3617,12 +4136,18 @@ paths:
           example: 'ad_user'
       responses:
         '200':
-          description: Successful response
+          description: OK. Returns the yaml schema of the table.
           content:
             application/yaml:
               schema:
                 type: string
                 description: yaml schema of table
+        '403':
+          $ref: '#/components/responses/ForbiddenGetRecordRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /models/{tableName}:
     parameters:
       - name: tableName
@@ -3649,8 +4174,9 @@ paths:
       parameters:
         - name: $expand
           in: query
+          required: false
           schema:
-            $ref: '#/components/parameters/expand'
+            type: string
           examples:
             noExpand:
               value: ''
@@ -3658,8 +4184,9 @@ paths:
               value: C_OrderTax,C_OrderLine($select=Line,Linenetamt ; $top=1 ; $skip=1 ; $filter=IsActive eq true ; $orderby=Line)            
         - name: $filter
           in: query
+          required: false
           schema:
-            $ref: '#/components/parameters/filter'
+            type: string
           examples:
             noFilter:
               value: ''
@@ -3672,8 +4199,9 @@ paths:
         - $ref: '#/components/parameters/orderby'
         - name: $select
           in: query
+          required: false
           schema:
-            $ref: '#/components/parameters/select'
+            type: string
           examples:
             noSelect:
               value: ''
@@ -3685,8 +4213,9 @@ paths:
         - $ref: '#/components/parameters/skip'
         - name: $valrule
           in: query
+          required: false
           schema:
-            $ref: '#/components/parameters/valrule'
+            type: integer
           examples:
             noValRule:
               value: 
@@ -3694,8 +4223,9 @@ paths:
               value: 210
         - name: $context
           in: query
+          required: false
           schema:
-            $ref: '#/components/parameters/context'
+            type: string
           examples:
             noContext: 
               value:
@@ -3706,11 +4236,47 @@ paths:
         - $ref: '#/components/parameters/showlabel'
       responses:
         '200':
-          description: Successful response
+          description: OK. Returns the requested list of records and pagination metadata.
           content:
-            application/json: {}
+            application/json:
+              schema:
+                type: object
+                properties:
+                  page-count:
+                    type: integer
+                    description: number of pages
+                    example: 1
+                  records-size:
+                    type: integer
+                    description: number of records per page
+                    example: 10
+                  skip-records:
+                    type: integer
+                    description: number of skipped records
+                    example: 0
+                  row-count:
+                    type: integer
+                    description: total number of records
+                    example: 10
+                  array-count:
+                    type: integer
+                    description: number of arrays
+                    example: 1
+                  records:
+                    type: array
+                    description: Records
+                    items:
+                      type: object
+        '400':
+          $ref: '#/components/responses/BadQueryRecordsRequest'
+        '403':
+          $ref: '#/components/responses/ForbiddenQueryRecordsRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+        '501':
+          $ref: '#/components/responses/NotImplementedQueryMethod'
     post:
       tags:
         - Models
@@ -3776,9 +4342,15 @@ paths:
                   }
       responses:
         '201':
-          description: Successful response
+          description: Created. Returns the created record.
           content:
             application/json: {}
+        '400':
+          $ref: '#/components/responses/BadCreateRecordRequest'
+        '403':
+          $ref: '#/components/responses/ForbiddenCreateRecordRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/ServerError'
   /models/{tableName}/{id}:
@@ -3843,8 +4415,9 @@ paths:
       parameters:                
         - name: $expand
           in: query
+          required: false
           schema:
-            $ref: '#/components/parameters/expand'
+            type: string
           examples:
             noExpand:
               value: ''
@@ -3860,8 +4433,9 @@ paths:
               value: m_product_category_id($select=Name,IsDefault),M_ProductPrice
         - name: $select
           in: query
+          required: false
           schema:
-            $ref: '#/components/parameters/select'
+            type: string
           examples:
             noSelect:
               value: ''
@@ -3871,11 +4445,15 @@ paths:
         - $ref: '#/components/parameters/showlabel'
       responses:
         '200':
-          description: Successful response
+          description: OK. Returns the record data.
           content:
             application/json: {}
+        '403':
+          $ref: '#/components/responses/ForbiddenGetRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
     put:
       tags:
         - Models
@@ -3928,9 +4506,10 @@ paths:
                   }
       responses:
         '200':
-          description: Successful response
-          content:
-            application/json: {}
+          description: OK. Return the updated record.
+          content: {}
+        '403':
+          $ref: '#/components/responses/ForbiddenUpdateRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -3941,9 +4520,17 @@ paths:
       summary: delete record by id
       responses:
         '200':
-          description: Successful response
+          description: OK. Record successfully deleted.
           content:
-            application/json: {}        
+            application/json:
+               schema:
+                  type: object
+               example:
+                  {
+                     "msg": "Deleted"
+                  }
+        '403':
+          $ref: '#/components/responses/ForbiddenDeleteRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -3990,8 +4577,12 @@ paths:
           description: Successful response
           content:
             application/json: {}
+        '403':
+          $ref: '#/components/responses/ForbiddenGetRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /models/{tableName}/{id}/attachments:
     parameters:
       - name: tableName
@@ -4021,13 +4612,17 @@ paths:
       summary: Get list of attachment of a record      
       responses:
         '200':
-          description: Successful response
+          description: OK. Return the list of attachment records.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Attachments'
+        '403':
+          $ref: '#/components/responses/ForbiddenGetRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
     post:
       tags:
         - Models
@@ -4047,11 +4642,36 @@ paths:
                   description: base64 encoded file content
       responses:
         '201':
-          description: Successful response
+          description: Created. Attachment added/updated.
           content:
             application/json: {}
+        '400':
+          description: Bad request. Missing filename/data or malformed base64 content.          
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                data_mandatory:
+                  value:
+                    status: 400
+                    title: data property is mandatory
+        '403':
+          $ref: '#/components/responses/ForbiddenCreateRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          description: Conflict. Filename collision (and overwrite is false).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                filename_collision:
+                  value:
+                    title: Duplicate file name
+                    status: 409                    
+                    detail: 'Duplicate file name: abc.png'
         '500':
           $ref: '#/components/responses/ServerError'
     delete:
@@ -4060,9 +4680,13 @@ paths:
       summary: Delete attachment of a record
       responses:
         '200':
-          description: Successful response
+          description: OK. Attachment deleted successfully.
           content:
-            application/json: {}
+            application/json:
+              example:
+                msg: Deleted
+        '403':
+          $ref: '#/components/responses/ForbiddenDeleteRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -4098,8 +4722,12 @@ paths:
       responses:
         '200':
           $ref: '#/components/responses/BinaryResponse'
+        '403':
+          $ref: '#/components/responses/ForbiddenGetRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /models/{tableName}/{id}/attachments/{fileName}:
     parameters:
       - $ref: '#/components/parameters/locale'
@@ -4131,8 +4759,115 @@ paths:
       responses:
         '200':
           $ref: '#/components/responses/BinaryResponse'
+        '403':
+          $ref: '#/components/responses/ForbiddenGetRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /models/{tableName}/{id}/archives:
+    parameters:
+      - $ref: '#/components/parameters/locale'
+    get:
+      tags:
+        - Models
+      summary: Get list of archives of a record
+      description: >-
+        Returns the archive entries (e.g. previously printed report PDFs stored in
+        AD_Archive) attached to the record, most recent first.
+      parameters:
+        - name: tableName
+          in: path
+          schema:
+            type: string
+          description: table name
+          required: true
+          examples:
+            C_Invoice:
+              value: 'c_invoice'
+        - name: id
+          in: path
+          schema:
+            oneOf:
+              - type: string
+              - type: integer
+          description: integer record id or string record uuid
+          required: true
+          examples:
+            C_Invoice_1000045:
+              value: 1000045
+      responses:
+        '200':
+          description: OK. Return the list of archive records.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Archives'
+        '403':
+          $ref: '#/components/responses/ForbiddenGetRecordRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /models/{tableName}/{id}/archives/{archiveId}:
+    parameters:
+      - $ref: '#/components/parameters/locale'
+    get:
+      tags:
+        - Models
+      summary: Get archive of a record by archive id
+      description: >-
+        Returns the binary content of a single archive entry. By default the raw
+        file stream is returned; pass the json query parameter to receive a JSON
+        object with base64 encoded data instead.
+      parameters:
+        - name: tableName
+          in: path
+          schema:
+            type: string
+          description: table name
+          required: true
+        - name: id
+          in: path
+          schema:
+            oneOf:
+              - type: string
+              - type: integer
+          description: integer record id or string record uuid
+          required: true
+        - name: archiveId
+          in: path
+          schema:
+            type: integer
+          description: AD_Archive_ID of the archive entry
+          required: true
+        - name: json
+          in: query
+          schema:
+            type: string
+          description: 'not empty to get archive content as base64 encoded data ("data": "base64 content")'
+      responses:
+        '200':
+          description: OK. Successfully retrieved the archive. The response body is either the file stream or a JSON object with base64 encoded data (if json is specified).
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: string
+                    format: byte
+                    description: base64 encoded archive content
+        '403':
+          $ref: '#/components/responses/ForbiddenGetRecordRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /models/{tableName}/{id}/print:
     parameters:
       - $ref: '#/components/parameters/locale'
@@ -4161,15 +4896,35 @@ paths:
           examples:
             C_Order_102:
               value: 102
+        - name: '$report_type'
+          in: query
+          schema:
+            type: string
+            default: 'PDF'
+          description: "printout report type"
+          required: false
+          examples:
+            xlsx_reportType:
+              value: 'XLSX'
+            csv_reportType:
+              value: 'CSV'
+            html_reportType:
+              value: 'HTML'
+            pdf_reportType:
+              value: 'PDF'
       responses:
         '200':
-          description: Successful response
+          description: OK. Returns a ProcessInfo object with the base64 encoded report data.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProcessInfo'
+        '403':
+          $ref: '#/components/responses/ForbiddenGetRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /windows:
     parameters:
       - $ref: '#/components/parameters/locale'
@@ -4180,8 +4935,9 @@ paths:
       parameters:
         - name: $filter
           in: query
+          required: false
           schema:
-            $ref: '#/components/parameters/filter'
+            type: string
           examples:
             noFilter:
               value: ''
@@ -4189,13 +4945,21 @@ paths:
               value: name eq 'Bank/Cash'
       responses:
         '200':
-          description: Successful response
+          description: OK. Returns a list of window.
           content:
             application/json:
               schema:
                 type: array
                 items:
                   $ref: '#/components/schemas/Window'
+        '400':
+          $ref: '#/components/responses/BadQueryRecordsRequest'
+        '403':
+          $ref: '#/components/responses/ForbiddenGetRecordRequest'
+        '500':
+          $ref: '#/components/responses/ServerError'
+        '501':
+          $ref: '#/components/responses/NotImplementedQueryMethod'
   /windows/{windowSlug}/tabs:
     parameters:
       - $ref: '#/components/parameters/locale'
@@ -4215,13 +4979,17 @@ paths:
               value: 'bank-cash'
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully retrieved the window and its list of tabs.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Window'
+        '403':
+          $ref: '#/components/responses/ForbiddenGetRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /windows/{windowSlug}/tabs/{tabSlug}/fields:
     parameters:
       - $ref: '#/components/parameters/locale'
@@ -4248,9 +5016,10 @@ paths:
           examples:
             bankCashWindow_bankCashTab:
               value: 'bank-cash'
+        - $ref: '#/components/parameters/filter'
       responses:
         '200':
-          description: Successful response
+          description: OK. Returns a list of tab field.
           content:
             application/json:
               schema:
@@ -4260,8 +5029,16 @@ paths:
                     type: array
                     items:
                       $ref: '#/components/schemas/TabField'
+        '400':
+          $ref: '#/components/responses/BadQueryRecordsRequest'
+        '403':
+          $ref: '#/components/responses/ForbiddenQueryRecordsRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+        '501':
+          $ref: '#/components/responses/NotImplementedQueryMethod'
   /windows/{windowSlug}:
     parameters:
       - name: windowSlug
@@ -4283,14 +5060,14 @@ paths:
       parameters:        
         - name: $filter
           in: query
-          description: SQL filter clause
+          description: oData filter clause
           schema:
             type: string
           examples:
             noFilter:
               value: ''
             BankCash_Name:
-              value: Name='MoneyBank'
+              value: Name eq 'MoneyBank'
         - name: $sort_column
           in: query
           description: Column to sort by, use ! prefix for descending sort
@@ -4311,7 +5088,7 @@ paths:
           example: 0
       responses:
         '200':
-          description: Successful response
+          description: OK. Returns a list of record of a window.
           content:
             application/json:
               schema:
@@ -4337,12 +5114,28 @@ paths:
                     type: array
                     items:
                       type: object
+        '400':
+          $ref: '#/components/responses/BadQueryRecordsRequest'
+        '403':
+          $ref: '#/components/responses/ForbiddenQueryRecordsRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+        '501':
+          $ref: '#/components/responses/NotImplementedQueryMethod'
     post:
       tags:
         - Windows
       summary: Create window record
+      parameters:
+        - name: $save
+          in: query
+          description: If false, applies default values and callouts without persisting changes to the database
+          schema:
+            type: boolean
+            default: true
+          required: false
       requestBody:
         content:
           application/json:
@@ -4361,40 +5154,48 @@ paths:
                     "doc-action": "CO"
                   }
       responses:
-        '201':
-          description: Successful response
+        '200':
+          description: Successfully processed the record (applying defaults and callouts) without persisting it to the database.
           content:
             application/json: {}
+        '201':
+          description: Created. Successfully created the record and persisted to the database.
+          content:
+            application/json: {}
+        '400':
+          $ref: '#/components/responses/BadCreateRecordRequest'
+        '403':
+          $ref: '#/components/responses/ForbiddenCreateRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/ServerError'
   /windows/{windowSlug}/{id}:
     parameters:
+      - name: windowSlug
+        in: path
+        required: true
+        description: slugify window name
+        schema:
+          type: string
+        examples:
+          bankCashWindow:
+            value: 'bank-cash'
+      - name: id
+        in: path
+        required: true
+        description: record id
+        schema:
+          type: integer
+        examples:
+          bankCash_100:
+            value: 100
       - $ref: '#/components/parameters/locale'
     get:
       tags:
         - Windows
       summary: Get record by id
-      parameters:
-        - name: windowSlug
-          in: path
-          required: true
-          description: slugify window name
-          schema:
-            type: string
-          examples:
-            bankCashWindow:
-              value: 'bank-cash'
-        - name: id
-          in: path
-          required: true
-          description: record id
-          schema:
-            type: integer
-          examples:
-            bankCash_100:
-              value: 100
+      parameters:        
         - name: $expand
           in: query
           schema:
@@ -4407,13 +5208,70 @@ paths:
               value: 'account'
       responses:
         '200':
-          description: Successful response
+          description: OK. Returns the record of a window.
           content:
             application/json: {}
-        '500':
-          $ref: '#/components/responses/ServerError'
+        '403':
+          $ref: '#/components/responses/ForbiddenGetRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+    put:
+      tags:
+        - Windows
+      summary: Update window record by id (tab 0)
+      parameters:
+        - name: $save
+          in: query
+          description: If false, applies default values and callouts without persisting changes to the database
+          schema:
+            type: boolean
+            default: true
+          required: false
+      requestBody:
+        content:
+          application/json:
+            examples:
+              bankCashWindow:
+                value:
+                  {
+                      "Name": "My MoneyBank"
+                  }
+      responses:
+        '200':
+          description: OK. Return the updated record or simulated results (with callouts applied) dependings on the $save value.
+          content:
+            application/json: {}
+        '400':
+          $ref: '#/components/responses/BadUpdateRecordRequest'
+        '403':
+          $ref: '#/components/responses/ForbiddenUpdateRecordRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+    delete:
+      tags:
+        - Windows
+      summary: Delete window record by id
+      responses:
+        '200':
+          description: OK. Returns a message indicating the window record has been deleted.
+          content:
+            application/json:
+               schema:
+                  type: object
+               example:
+                  {
+                     "msg": "Deleted"
+                  }
+        '403':
+          $ref: '#/components/responses/ForbiddenDeleteRecordRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /windows/{windowSlug}/{id}/print:
     parameters:
       - $ref: '#/components/parameters/locale'
@@ -4442,13 +5300,17 @@ paths:
               value: 102
       responses:
         '200':
-          description: Successful response
+          description: OK. Returns a ProcessInfo object with the base64 encoded report data.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProcessInfo'
+        '403':
+          $ref: '#/components/responses/ForbiddenGetRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /windows/{windowSlug}/tabs/{tabSlug}/{id}:
     parameters:
       - name: windowSlug
@@ -4487,17 +5349,27 @@ paths:
       summary: Get tab record by id      
       responses:
         '200':
-          description: Successful response
+          description: OK. Returns the requested tab record.
           content:
             application/json: {}
-        '500':
-          $ref: '#/components/responses/ServerError'
+        '403':
+          $ref: '#/components/responses/ForbiddenGetRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
     put:
       tags:
         - Windows
       summary: Update tab record by id
+      parameters:
+        - name: $save
+          in: query
+          description: If false, applies default values and callouts without persisting changes to the database
+          schema:
+            type: boolean
+            default: true
+          required: false
       requestBody:
         content:
           application/json:
@@ -4509,26 +5381,38 @@ paths:
                   }
       responses:
         '200':
-          description: Successful response
+          description: OK. Return the updated record or simulated results (with callouts applied) dependings on the $save value.
           content:
             application/json: {}
-        '500':
-          $ref: '#/components/responses/ServerError'
+        '400':
+          $ref: '#/components/responses/BadUpdateRecordRequest'
+        '403':
+          $ref: '#/components/responses/ForbiddenUpdateRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
     delete:
       tags:
         - Windows
-      summary: Update tab record by id
+      summary: Delete tab record by id
       responses:
         '200':
-          description: Successful response
+          description: OK. Returns a message indicating the resource access has been deleted.
           content:
-            application/json: {}
-        '500':
-          $ref: '#/components/responses/ServerError'
+            application/json:
+               schema:
+                  type: object
+               example:
+                  {
+                     "msg": "Deleted"
+                  }
+        '403':
+          $ref: '#/components/responses/ForbiddenDeleteRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /windows/{windowSlug}/tabs/{tabSlug}/{id}/{childTabSlug}:
     parameters:
       - name: windowSlug
@@ -4571,10 +5455,39 @@ paths:
     get:
       tags:
         - Windows
-      summary: Get child tab records      
+      summary: Get child tab records
+      parameters:        
+        - name: $filter
+          in: query
+          description: oData filter clause
+          schema:
+            type: string
+          examples:
+            noFilter:
+              value: ''
+            BankCash_Name:
+              value: Name eq 'MoneyBank'
+        - name: $sort_column
+          in: query
+          description: Column to sort by, use ! prefix for descending sort
+          schema:
+            type: string
+          examples:
+            noSortColumn:
+              value: ''
+            SortByName:
+              value: 'Name'
+            SortByNameDescending:
+              value: '!Name'
+        - name: $page_no
+          in: query
+          description: Current page no
+          schema:
+            type: integer
+          example: 0 
       responses:
         '200':
-          description: Successful response
+          description: OK. Returns a list of child tab records of a parent record.
           content:
             application/json:
               schema:
@@ -4596,18 +5509,32 @@ paths:
                     type: integer
                     description: total row count
                     example: 2
-                  childtab-records:
+                  window-records:
                     type: array
                     items:
                       type: object
+        '400':
+          $ref: '#/components/responses/BadQueryRecordsRequest'
+        '403':
+          $ref: '#/components/responses/ForbiddenQueryRecordsRequest'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/ServerError'
+        '501':
+          $ref: '#/components/responses/NotImplementedQueryMethod'
     post:
       tags:
         - Windows
       summary: create child tab record
+      parameters:
+        - name: $save
+          in: query
+          description: If false, applies default values and callouts without persisting changes to the database
+          schema:
+            type: boolean
+            default: true
+          required: false
       requestBody:
         content:
           application/json:
@@ -4629,10 +5556,18 @@ paths:
                       }
                   }
       responses:
-        '201':
-          description: Successful response
+        '200':
+          description: Successfully processed the record (applying defaults and callouts) without persisting it to the database.
           content:
             application/json: {}
+        '201':
+          description: Created. Successfully created the record and persisted to the database.
+          content:
+            application/json: {}
+        '400':
+          $ref: '#/components/responses/BadCreateRecordRequest'
+        '403':
+          $ref: '#/components/responses/ForbiddenCreateRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -4656,11 +5591,21 @@ paths:
               value: entityType neq 'D'
       responses:
         '200':
-          description: Successful response
+          description: OK. Returns the list of form.
           content:
             application/json:
                schema:
                   $ref: '#/components/schemas/Forms'
+        '400':
+          $ref: '#/components/responses/BadQueryRecordsRequest'
+        '403':
+          $ref: '#/components/responses/ForbiddenQueryRecordsRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+        '501':
+          $ref: '#/components/responses/NotImplementedQueryMethod'
   /processes:
     parameters:
       - $ref: '#/components/parameters/locale'
@@ -4680,11 +5625,25 @@ paths:
               value: contains(name,'Business Partner')
       responses:
         '200':
-          description: Successful response
+          description: OK. Returns the list of process.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Processes'
+        '400':
+          description: Bad Request. Syntax error in the $filter query parameter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalid_filter:
+                  value:
+                    title: 'GET Error'
+                    status: 400
+                    detail: 'Unsupported operator: xyz'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /processes/{processSlug}:
     parameters:
       - name: processSlug
@@ -4704,13 +5663,17 @@ paths:
       summary: Get process definition by slugify process name      
       responses:
         '200':
-          description: Successful response
+          description: OK. Returns the process definition.
           content:
             application/json:
                schema:
                   $ref: '#/components/schemas/Process'
+        '403':
+          $ref: '#/components/responses/ForbiddenGetRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
     post:
       tags:
         - Process
@@ -4729,13 +5692,38 @@ paths:
                   }
       responses:
         '200':
-          description: Successful response
+          description: OK. The process was executed and results are returned.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProcessInfo'
+        '403':
+          description: Forbidden. Current user role lacks permission to execute the process.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                forbidden:
+                  value:
+                    title: 'Access denied'
+                    status: 403
+                    detail: 'Access denied for process: xyz'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          description: Conflict. The process is already running.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                already_running:
+                  value:
+                    title: 'Process is already running'
+                    status: 409
+        '500':
+          $ref: '#/components/responses/ServerError'
   /tasks:
     parameters:
       - $ref: '#/components/parameters/locale'
@@ -4750,11 +5738,21 @@ paths:
             type: string
       responses:
         '200':
-          description: Successful response
+          description: OK. Returns the list of task.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Tasks'
+        '400':
+          $ref: '#/components/responses/BadQueryRecordsRequest'
+        '403':
+          $ref: '#/components/responses/ForbiddenQueryRecordsRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+        '501':
+          $ref: '#/components/responses/NotImplementedQueryMethod'
   /tasks/{taskSlug}:
     parameters:
       - name: taskSlug
@@ -4773,22 +5771,29 @@ paths:
       summary: Get task definition      
       responses:
         '200':
-          description: Successful response
+          description: OK. Returns a task definition.
           content:
             application/json:
                schema:
                   $ref: '#/components/schemas/Task'
-        '500':
-          $ref: '#/components/responses/ServerError'
+        '403':
+          $ref: '#/components/responses/ForbiddenGetRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
     post:
       tags:
         - Tasks
       summary: Run task
+      requestBody:
+        description: Task parameters
+        required: false
+        content:
+          application/json: {}
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully executed the task. Returns a JSON object containing the exitValue, stdOut, and stdErr of the process.
           content:
             application/json:
                schema:
@@ -4804,10 +5809,22 @@ paths:
                     stdErr:
                       type: string
                       description: OS task standard error text
-        '500':
-          $ref: '#/components/responses/ServerError'
+        '403':
+          description: Forbidden. Current user role lacks permission to execute the task.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                forbidden:
+                  value:
+                    title: 'Access denied'
+                    status: 403
+                    detail: 'Access denied for task: xyz' 
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'        
   /files:
     parameters:
       - $ref: '#/components/parameters/locale'
@@ -4840,7 +5857,7 @@ paths:
           description: 'not empty to get file content as base64 encoded data ("data": "base64 content")'
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully retrieved the file. The response body is either the file stream or a JSON object with base64 encoded data (if asJson is specified).
           content:
             application/octet-stream:
               schema:
@@ -4860,8 +5877,27 @@ paths:
                     type: string
                     format: byte
                     description: base64 encoded file content
+        '403':
+          description: Forbidden. Current user role lacks permission to get the file.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                not_readable:
+                  value:
+                    title: 'File not readable'
+                    status: 403
+                    detail: 'File not readable: fileName.pdf' 
+                access_denied:
+                  value:
+                    title: 'Access denied'
+                    status: 403
+                    detail: 'Access denied for file: fileName.pdf' 
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /reference/{id}:
     parameters:
       - $ref: '#/components/parameters/locale'
@@ -4887,13 +5923,27 @@ paths:
               value: 'AD_Menu Action'
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully retrieved the reference definition and its list of items
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Reference'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+        '501':
+          description: Not implemented. The reference name is not found or no access to this reference
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                not_implemented:
+                  value:
+                    title: 'References with data validation are not implemented.'
+                    status: 501
+                    detail: 'Not implemented AD_Reference_ID: 1000115'
   /caches:
     parameters:
       - name: table_name
@@ -4913,11 +5963,25 @@ paths:
           description: optional name filter
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully retrieved the list of system caches, optionally filtered by table_name or name.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Caches'
+        '403':
+          description: Forbidden. Only administrators can access system caches.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                forbidden:
+                  value:
+                    title: 'Access denied'
+                    status: 403
+                    detail: 'Access denied for get caches request'
+        '500':
+          $ref: '#/components/responses/ServerError'
     delete:
       tags:
         - Caches
@@ -4930,7 +5994,7 @@ paths:
           description: optional record id filter
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully reset the specified cache(s).
           content:
             application/json:
               schema:
@@ -4939,6 +6003,20 @@ paths:
                   entriesReset:
                     type: integer
                     description: number of cache entries reset
+        '403':
+          description: Forbidden. Only administrators can reset cache.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                forbidden:
+                  value:
+                    title: 'Access denied'
+                    status: 403
+                    detail: 'Access denied for cache reset request'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /nodes:
     parameters:
       - $ref: '#/components/parameters/locale'
@@ -4948,11 +6026,25 @@ paths:
       summary: get list of server node
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully retrieved the list of nodes in the iDempiere cluster.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ServerNodes'
+        '403':
+          description: Forbidden. Only administrators can access system caches.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                forbidden:
+                  value:
+                    title: 'Access denied'
+                    status: 403
+                    detail: 'Access denied for get nodes request'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /nodes/{id}:
     parameters:
       - $ref: '#/components/parameters/locale'
@@ -4970,13 +6062,27 @@ paths:
           description: server node id
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully retrieved detailed system information for the specified node.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ServerNodeInfo'
+        '403':
+          description: Forbidden. Only administrators can access server node.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                forbidden:
+                  value:
+                    title: 'Access denied'
+                    status: 403
+                    detail: 'Access denied for get node info request'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /nodes/{id}/logs:
     parameters:
       - name: id
@@ -4993,7 +6099,7 @@ paths:
       summary: get list of log file by server node id      
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully retrieved the list of log files available on the specified node, including their file names and sizes.
           content:
             application/json:
               schema:
@@ -5010,15 +6116,29 @@ paths:
                         fileSize:
                           type: integer
                           description: log file size
+        '403':
+          description: Forbidden. Only administrators can access server log files.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                forbidden:
+                  value:
+                    title: 'Access denied'
+                    status: 403
+                    detail: 'Access denied for get node log file request'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
     delete:
       tags:
         - Nodes
       summary: remove server log files
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully removed existing log files from the server, and the new current log file is now in use.
           content:
             application/json:
               schema:
@@ -5027,8 +6147,22 @@ paths:
                   currentLogFile:
                     type: string
                     description: current server log file name after removal of existing log files
+        '403':
+          description: Forbidden. Only administrators can delete server log files.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                forbidden:
+                  value:
+                    title: 'Access denied'
+                    status: 403
+                    detail: 'Access denied for delete logs request'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /nodes/{id}/logs/{fileName}:
     parameters:
       - $ref: '#/components/parameters/locale'
@@ -5057,7 +6191,7 @@ paths:
           description: 'not empty to get file content as base64 encoded data ("data": "base64 content")'
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully retrieved the requested log file. The response is either the raw file stream or a JSON object with base64 encoded data.
           content:
             application/octet-stream:
               schema:
@@ -5077,8 +6211,22 @@ paths:
                     type: string
                     format: byte
                     description: base64 encoded file content
+        '403':
+          description: Forbidden. Only administrators can access server log file.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                forbidden:
+                  value:
+                    title: 'Access denied'
+                    status: 403
+                    detail: 'Access denied for get node log file request'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /nodes/{id}/logs/rotate:
     parameters:
       - $ref: '#/components/parameters/locale'
@@ -5096,11 +6244,25 @@ paths:
           description: server node id
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully rotated the server log. Returns the name of the new currentLogFile that is now active.
           content:
             application/json: {}
+        '403':
+          description: Forbidden. Only administrators can rotate server log.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                forbidden:
+                  value:
+                    title: 'Access denied'
+                    status: 403
+                    detail: 'Access denied for rotate log request'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /servers:
     parameters:
       - $ref: '#/components/parameters/locale'
@@ -5110,11 +6272,25 @@ paths:
       summary: get server jobs
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully retrieved the list of all registered server instances (e.g., Schedulers, Request Processors, etc.).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ServerJobs'
+        '403':
+          description: Forbidden. Only administrators can access server jobs.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                forbidden:
+                  value:
+                    title: 'Access denied'
+                    status: 403
+                    detail: 'Access denied for get servers request'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /servers/{id}:
     parameters:
       - $ref: '#/components/parameters/locale'
@@ -5131,13 +6307,27 @@ paths:
           description: server job id
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully retrieved detailed information for the specified server instance.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ServerJobInfo'
+        '403':
+          description: Forbidden. Only administrators can access server job.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                forbidden:
+                  value:
+                    title: 'Access denied'
+                    status: 403
+                    detail: 'Access denied for get server request'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /servers/{id}/logs:
     parameters:
       - $ref: '#/components/parameters/locale'
@@ -5154,13 +6344,27 @@ paths:
           description: server job id
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully retrieved the history of execution logs for the specified server instance.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ServerJobLogs'
+        '403':
+          description: Forbidden. Only administrators can access server job logs.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                forbidden:
+                  value:
+                    title: 'Access denied'
+                    status: 403
+                    detail: 'Access denied for get server logs request'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /servers/{id}/state:
     parameters:
       - $ref: '#/components/parameters/locale'
@@ -5177,11 +6381,23 @@ paths:
           description: server job id
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully toggled the server state (Started → Stopped or Stopped → Started). Returns the updated server information.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ServerJobInfo'
+        '403':
+          description: Forbidden. Only administrators can toggle server job state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                forbidden:
+                  value:
+                    title: 'Access denied'
+                    status: 403
+                    detail: 'Access denied for change server state request'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -5202,11 +6418,23 @@ paths:
           description: server job id
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully triggered the server instance to run immediately.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ServerJobInfo'
+        '403':
+          description: Forbidden. Only administrators can issue run now request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                forbidden:
+                  value:
+                    title: 'Access denied'
+                    status: 403
+                    detail: 'Access denied for run now request'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -5223,11 +6451,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ServerJobs'
-        '401':
-          description: Not authorize response
+        '403':
+          description: Forbidden. Only administrators can reload server jobs.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                forbidden:
+                  value:
+                    title: 'Access denied'
+                    status: 403
+                    detail: 'Access denied for reload servers request'
         '500':
           $ref: '#/components/responses/ServerError'
   /servers/schedulers/{id}:
@@ -5245,13 +6480,25 @@ paths:
       summary: Get scheduler details by id      
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully retrieved the scheduler configuration and its current runtime state.
           content:
             application/json:
               schema:
                 allOf:
                   - $ref: '#/components/schemas/AD_Scheduler'
                   - $ref: '#/components/schemas/SchedulerServerJob'
+        '403':
+          description: Forbidden. Only administrators can get scheduler details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                forbidden:
+                  value:
+                    title: 'Access denied'
+                    status: 403
+                    detail: 'Access denied for get scheduler request'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -5262,20 +6509,33 @@ paths:
       summary: Create new server job for scheduler
       responses:
         '201':
-          description: Successful response
+          description: Created. Successfully added the scheduler to the active server manager and returned its configuration and state.
           content:
             application/json:
               schema:
                 allOf:
                   - $ref: '#/components/schemas/AD_Scheduler'
                   - $ref: '#/components/schemas/SchedulerServerJob'
+        '403':
+          description: Forbidden. Only administrators can add server job for scheduler.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                forbidden:
+                  value:
+                    title: 'Access denied'
+                    status: 403
+                    detail: 'Access denied for add scheduler request'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          description: Conflict response (server job exists for scheduler)
+          description: Conflict. The specified scheduler is already registered and active in the server manager.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              schema:
+                $ref: '#/components/schemas/SchedulerServerJob'
         '500':
           $ref: '#/components/responses/ServerError'
     delete:
@@ -5284,13 +6544,37 @@ paths:
       summary: Remove server job of a scheduler
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully removed the scheduler from the active server manager.
           content:
             application/json:
               schema:
                 allOf:
                   - $ref: '#/components/schemas/AD_Scheduler'
                   - $ref: '#/components/schemas/SchedulerServerJob'
+        '400':
+          description: Bad Request. The provided scheduler ID is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalidArgument:
+                  value:
+                    title: 'Invalid scheduler id'
+                    status: 400
+                    detail: 'Invalid scheduler id: -1'
+        '403':
+          description: Forbidden. Only administrators can remove server job of scheduler.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                forbidden:
+                  value:
+                    title: 'Access denied'
+                    status: 403
+                    detail: 'Access denied for remove scheduler request'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -5306,7 +6590,7 @@ paths:
         - $ref: '#/components/parameters/filter'
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully retrieved the list of accessible Info Windows
           content:
             application/json:
               schema:
@@ -5322,6 +6606,12 @@ paths:
                             slug:
                               type: string
                               description: slugify info window name
+        '400':
+          $ref: '#/components/responses/BadQueryRecordsRequest'
+        '500':
+          $ref: '#/components/responses/ServerError'
+        '501':
+          $ref: '#/components/responses/NotImplementedQueryMethod'
   /infos/{infoSlug}:
     parameters:
       - $ref: '#/components/parameters/locale'
@@ -5341,12 +6631,7 @@ paths:
           schema:
             type: string
           description: json for info window query parameters
-        - name: $where_clause
-          in: query
-          schema:
-            type: string
-          description: where clause for info window
-        - name: $order_by
+        - name: $orderby
           in: query
           schema:
             type: string
@@ -5359,8 +6644,12 @@ paths:
           description: current page number (starting from 0)
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully retrieved the records for the specified Info Window.
           headers:
+            X-Array-Count:
+              schema:
+                type: integer
+              description: total number of records
             X-Page:
               schema:
                 type: integer
@@ -5382,12 +6671,29 @@ paths:
               schema:
                 type: object
                 properties:
+                  row-count:
+                    type: integer
+                    description: total number of records
                   infowindow-records:
                     type: array
                     items:
                       type: object
+        '403':
+          description: Forbidden. Access denied.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                forbidden:
+                  value:
+                    title: 'Access denied'
+                    status: 403
+                    detail: 'Access denied for info window: InfoOrder'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /infos/{infoSlug}/columns:
     parameters:
       - $ref: '#/components/parameters/locale'
@@ -5404,7 +6710,7 @@ paths:
           description: slugify info window name
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully retrieved the list of column definitions.
           content:
             application/json:
               schema:
@@ -5414,8 +6720,22 @@ paths:
                     type: array
                     items:
                       $ref: '#/components/schemas/AD_InfoColumn'
+        '403':
+          description: Forbidden. Access denied.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                forbidden:
+                  value:
+                    title: 'Access denied'
+                    status: 403
+                    detail: 'Access denied for info window: InfoOrder'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /infos/{infoSlug}/processes:
     parameters:
       - $ref: '#/components/parameters/locale'
@@ -5435,7 +6755,7 @@ paths:
               value: support-users-vs-roles
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully retrieved the list of processes associated with the specified Info Window.
           content:
             application/json:
               schema:
@@ -5445,8 +6765,22 @@ paths:
                     type: array
                     items:
                       $ref: '#/components/schemas/AD_InfoProcess'
+        '403':
+          description: Forbidden. Access denied.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                forbidden:
+                  value:
+                    title: 'Access denied'
+                    status: 403
+                    detail: 'Access denied for info window: InfoOrder'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /infos/{infoSlug}/relateds:
     parameters:
       - $ref: '#/components/parameters/locale'
@@ -5466,7 +6800,7 @@ paths:
               value: business-partner-info
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully retrieved the list of related Info Windows for the specified Info Window.
           content:
             application/json:
               schema:
@@ -5482,8 +6816,22 @@ paths:
                             slug:
                               type: string
                               description: slugify related info window name
+        '403':
+          description: Forbidden. Access denied.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                forbidden:
+                  value:
+                    title: 'Access denied'
+                    status: 403
+                    detail: 'Access denied for info window: InfoOrder'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /workflow:
     parameters:
       - $ref: '#/components/parameters/locale'
@@ -5493,7 +6841,7 @@ paths:
       summary: Get workflow nodes for current user
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully retrieved the list of pending workflow activities for current user.
           content:
             application/json:
               schema:
@@ -5526,7 +6874,7 @@ paths:
           description: user integer id or user string uuid
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully retrieved the list of pending workflow activities for the specified user.
           content:
             application/json:
               schema:
@@ -5539,6 +6887,18 @@ paths:
                     type: array
                     items:
                       $ref: '#/components/schemas/WorkflowActivityNode'
+        '400':
+          description: Bad Request. The provided userId does not match any existing user record.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalidInput:
+                  value:
+                    title: 'User not found'
+                    status: 400
+                    detail: 'No user found matching id 1234567'
         '500':
           $ref: '#/components/responses/ServerError'
   /workflow/approve/{id}:
@@ -5568,13 +6928,26 @@ paths:
                   description: approval message
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully approved the workflow activity.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/WorkflowActivityResponse'
+        '400':
+          description: Bad Request. The current authenticated user is not authorized to approve this workflow activity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                not_authorized:
+                  value:
+                    title: 'The current User cannot action this Activity'
+                    status: 400
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /workflow/reject/{id}:
     parameters:
       - $ref: '#/components/parameters/locale'
@@ -5602,13 +6975,26 @@ paths:
                   description: reject message
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully rejected the workflow activity.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/WorkflowActivityResponse'
+        '400':
+          description: Bad Request. The current authenticated user is not authorized to reject this workflow activity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                not_authorized:
+                  value:
+                    title: 'The current User cannot action this Activity'
+                    status: 400
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /workflow/forward/{id}:
     parameters:
       - $ref: '#/components/parameters/locale'
@@ -5646,6 +7032,22 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/WorkflowActivityResponse'
+        '400':
+          description: Bad Request. Either 'userTo' is missing or invalid, or the current authenticated user is not authorized to forward this workflow activity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                not_authorized:
+                  value:
+                    title: 'The current User cannot action this Activity'
+                    status: 400
+                invalidUserTo:
+                  value:
+                    title: 'userTo property is mandatory.'
+                    status: 400
+                    detail: 'userTo property is not set or it has an invalid value'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -5677,13 +7079,26 @@ paths:
                   description: acknowledge message
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully acknowledged the workflow activity.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/WorkflowActivityResponse'
+        '400':
+          description: Bad Request. The current authenticated user is not authorized to acknowledge this workflow activity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                not_authorized:
+                  value:
+                    title: 'The current User cannot action this Activity'
+                    status: 400
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /workflow/setuserchoice/{id}:
     parameters:
       - $ref: '#/components/parameters/locale'
@@ -5714,11 +7129,22 @@ paths:
                   description: value to set
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully set the user choice for the workflow activity.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/WorkflowActivityResponse'
+        '400':
+          description: Bad Request. The current authenticated user is not authorized to set the user choice for this workflow activity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                not_authorized:
+                  value:
+                    title: 'The current User cannot action this Activity'
+                    status: 400
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -5740,13 +7166,17 @@ paths:
           description: true to include output message from parsing of status line
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully retrieved the list of authorized status lines, optionally including the parsed message for each line.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/StatusLines'
+        '400':
+          $ref: '#/components/responses/BadQueryRecordsRequest'
         '500':
           $ref: '#/components/responses/ServerError'
+        '501':
+          $ref: '#/components/responses/NotImplementedQueryMethod'
   /statuslines/{id}:
     parameters:
       - $ref: '#/components/parameters/locale'
@@ -5768,7 +7198,7 @@ paths:
               value: 200024
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully retrieved the status line and parsed its message value.
           content:
             application/json:
               schema:
@@ -5792,7 +7222,7 @@ paths:
         - $ref: '#/components/parameters/filter'
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully retrieved the data for multiple accessible charts.
           content:
             application/json:
               schema:
@@ -5802,8 +7232,12 @@ paths:
                     type: array
                     items: 
                       $ref: '#/components/schemas/ChartData'
+        '400':
+          $ref: '#/components/responses/BadQueryRecordsRequest'
         '500':
           $ref: '#/components/responses/ServerError'
+        '501':
+          $ref: '#/components/responses/NotImplementedQueryMethod'
   /charts/{id}:
     parameters:
       - $ref: '#/components/parameters/locale'
@@ -5837,7 +7271,7 @@ paths:
           description: if present, return chart as json data, otherwise as image
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully generated the chart image. Returns either the raw PNG image stream or a JSON object with base64 encoded image data.
           content:
             application/json:
               schema:
@@ -5852,7 +7286,7 @@ paths:
                 type: string
                 format: binary
         '404':
-          $ref: '#/components/responses/NotFound'
+          description: Not Found. No chart with the specified ID exists.
         '500':
           $ref: '#/components/responses/ServerError'
   /charts/{id}/data:
@@ -5900,7 +7334,7 @@ paths:
           description: menu tree integer record id or string uuid
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully retrieved the menu tree structure. Returns a hierarchical JSON representation of the menu entries.
           content:
             application/json:
               schema:
@@ -5924,7 +7358,7 @@ paths:
           example: name eq '{view name}' #Replace {view name} with REST view definition name, for e.g tenants
       responses:
         '200':
-          description: Successful response
+          description: OK. Successfully returned the metadata for the requested REST views.
           content:
             application/json:
                schema:
@@ -6027,6 +7461,20 @@ paths:
                                   type: boolean
                                   description: Flag indicating if the related view should be auto-expanded
                                   example: true
+        '400':
+          description: Bad Request. Malformed filter syntax.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalid_filter_syntax:
+                  value:
+                    title: "GET Error"
+                    status: 400
+                    detail: "Unsupported operator: xyz"
+        '500':
+          $ref: '#/components/responses/ServerError'
   /views/{viewName}/yaml:
     get:
       tags:
@@ -6042,12 +7490,26 @@ paths:
           example: 'users'
       responses:
         '200':
-          description: Successful response
+          description: OK. Returns the generated OpenAPI YAML specification for the requested view.
           content:
             application/yaml:
               schema:
                 type: string
                 description: yaml schema of view
+        '404':
+          description: Not Found. The specified REST View name does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                rest_view_not_found:
+                  value:
+                    title: "Invalid view name"
+                    status: 404
+                    detail: "No match found for view name: xyz"
+        '500':
+          $ref: '#/components/responses/ServerError'
   /views/{viewName}:
     parameters:
       - name: viewName
@@ -6076,11 +7538,47 @@ paths:
         - $ref: '#/components/parameters/showlabel'
       responses:
         '200':
-          description: Successful response
+          description: OK. Returns the requested list of records and pagination metadata.
           content:
-            application/json: {}
+            application/json:
+              schema:
+                type: object
+                properties:
+                  page-count:
+                    type: integer
+                    description: number of pages
+                    example: 1
+                  records-size:
+                    type: integer
+                    description: number of records per page
+                    example: 10
+                  skip-records:
+                    type: integer
+                    description: number of skipped records
+                    example: 0
+                  row-count:
+                    type: integer
+                    description: total number of records
+                    example: 10
+                  array-count:
+                    type: integer
+                    description: size of the records array
+                    example: 1
+                  records:
+                    type: array
+                    description: Records
+                    items:
+                      type: object
+        '400':
+          $ref: '#/components/responses/BadQueryRecordsRequest'
+        '403':
+          $ref: '#/components/responses/ForbiddenQueryRecordsRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+        '501':
+          $ref: '#/components/responses/NotImplementedQueryMethod'
     post:
       tags:
         - Views
@@ -6090,9 +7588,15 @@ paths:
           application/json: {}
       responses:
         '201':
-          description: Successful response
+          description: Created. Record and nested children successfully persisted.
           content:
             application/json: {}
+        '400':
+          $ref: '#/components/responses/BadCreateRecordRequest'
+        '403':
+          $ref: '#/components/responses/ForbiddenCreateRecordRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/ServerError'
   /views/{viewName}/{id}:
@@ -6123,11 +7627,15 @@ paths:
         - $ref: '#/components/parameters/showlabel'
       responses:
         '200':
-          description: Successful response
+          description: OK. Returns the requested single record.
           content:
             application/json: {}
+        '403':
+          $ref: '#/components/responses/ForbiddenGetRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
     put:
       tags:
         - Views
@@ -6137,9 +7645,13 @@ paths:
           application/json: {}
       responses:
         '200':
-          description: Successful response
+          description: OK. Record updated successfully.
           content:
             application/json: {}
+        '400':
+          $ref: '#/components/responses/BadUpdateRecordRequest'
+        '403':
+          $ref: '#/components/responses/ForbiddenUpdateRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -6150,9 +7662,11 @@ paths:
       summary: delete record by id
       responses:
         '200':
-          description: Successful response
+          description: OK. Record successfully deleted.
           content:
-            application/json: {}        
+            application/json: {}   
+        '403':
+          $ref: '#/components/responses/ForbiddenDeleteRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -6187,11 +7701,15 @@ paths:
           required: true
       responses:
         '200':
-          description: Successful response
+          description: OK. Returns the value of the specified property.
           content:
             application/json: {}
+        '403':
+          $ref: '#/components/responses/ForbiddenGetRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /views/{viewName}/{id}/attachments:
     parameters:
       - name: viewName
@@ -6215,26 +7733,17 @@ paths:
       summary: Get list of attachment of a record      
       responses:
         '200':
-          description: Successful response
+          description: OK. Return the list of attachment records.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  attachments:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        name:
-                          type: string
-                          description: attachment name
-                        contentType:
-                          type: string
-                          description: attachment content type
-                          example: image/png
+                $ref: '#/components/schemas/Attachments'
+        '403':
+          $ref: '#/components/responses/ForbiddenGetRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
     post:
       tags:
         - Views
@@ -6254,11 +7763,36 @@ paths:
                   description: base64 encoded file content
       responses:
         '201':
-          description: Successful response
+          description: Created. Attachment added/updated.
           content:
             application/json: {}
+        '400':
+          description: Bad request. Missing filename/data or malformed base64 content.          
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                data_mandatory:
+                  value:
+                    status: 400
+                    title: data property is mandatory
+        '403':
+          $ref: '#/components/responses/ForbiddenCreateRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          description: Conflict. Filename collision (and overwrite is false).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                filename_collision:
+                  value:
+                    title: Duplicate file name
+                    status: 409                    
+                    detail: 'Duplicate file name: abc.png'
         '500':
           $ref: '#/components/responses/ServerError'
     delete:
@@ -6267,9 +7801,13 @@ paths:
       summary: Delete attachment of a record
       responses:
         '200':
-          description: Successful response
+          description: OK. Attachment deleted successfully.
           content:
-            application/json: {}
+            application/json:
+              example:
+                msg: Deleted
+        '403':
+          $ref: '#/components/responses/ForbiddenDeleteRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -6298,14 +7836,13 @@ paths:
           required: true
       responses:
         '200':
-          description: Successful response
-          content:
-            application/octet-stream:
-              schema:
-                type: string
-                format: binary
+          $ref: '#/components/responses/BinaryResponse'
+        '403':
+          $ref: '#/components/responses/ForbiddenGetRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /views/{viewName}/{id}/attachments/{fileName}:
     parameters:
       - $ref: '#/components/parameters/locale'
@@ -6336,14 +7873,110 @@ paths:
           required: true
       responses:
         '200':
-          description: Successful response
+          $ref: '#/components/responses/BinaryResponse'
+        '403':
+          $ref: '#/components/responses/ForbiddenGetRecordRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /views/{viewName}/{id}/archives:
+    parameters:
+      - $ref: '#/components/parameters/locale'
+    get:
+      tags:
+        - Views
+      summary: Get list of archives of a record
+      description: >-
+        Returns the archive entries (e.g. previously printed report PDFs stored in
+        AD_Archive) attached to the record, most recent first.
+      parameters:
+        - name: viewName
+          in: path
+          schema:
+            type: string
+          description: REST_View name
+          required: true
+        - name: id
+          in: path
+          schema:
+            oneOf:
+              - type: string
+              - type: integer
+          description: integer record id or string record uuid
+          required: true
+      responses:
+        '200':
+          description: OK. Return the list of archive records.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Archives'
+        '403':
+          $ref: '#/components/responses/ForbiddenGetRecordRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /views/{viewName}/{id}/archives/{archiveId}:
+    parameters:
+      - $ref: '#/components/parameters/locale'
+    get:
+      tags:
+        - Views
+      summary: Get archive of a record by archive id
+      description: >-
+        Returns the binary content of a single archive entry. By default the raw
+        file stream is returned; pass the json query parameter to receive a JSON
+        object with base64 encoded data instead.
+      parameters:
+        - name: viewName
+          in: path
+          schema:
+            type: string
+          description: REST_View name
+          required: true
+        - name: id
+          in: path
+          schema:
+            oneOf:
+              - type: string
+              - type: integer
+          description: integer record id or string record uuid
+          required: true
+        - name: archiveId
+          in: path
+          schema:
+            type: integer
+          description: AD_Archive_ID of the archive entry
+          required: true
+        - name: json
+          in: query
+          schema:
+            type: string
+          description: 'not empty to get archive content as base64 encoded data ("data": "base64 content")'
+      responses:
+        '200':
+          description: OK. Successfully retrieved the archive. The response body is either the file stream or a JSON object with base64 encoded data (if json is specified).
           content:
             application/octet-stream:
               schema:
                 type: string
                 format: binary
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: string
+                    format: byte
+                    description: base64 encoded archive content
+        '403':
+          $ref: '#/components/responses/ForbiddenGetRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /views/{viewName}/{id}/print:
     get:
       tags:
@@ -6366,13 +7999,17 @@ paths:
           required: true
       responses:
         '200':
-          description: Successful response
+          description: OK. Returns a ProcessInfo object with the base64 encoded report data.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProcessInfo'
+        '403':
+          $ref: '#/components/responses/ForbiddenGetRecordRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
   /uploads:
     post:
       tags:
@@ -6429,6 +8066,12 @@ paths:
           description: integer sequence of chunk (start from 1)
           required: true
         - in: header
+          name: X-Total-Chunks
+          schema:
+            type: integer
+          description: Total number of chunks for the upload session
+          required: true
+        - in: header
           name: X-Content-SHA256
           schema:
             type: string
@@ -6465,6 +8108,12 @@ paths:
             type: string
           description: REST_Upload uuid
           required: true
+        - name: expiresInSeconds
+          in: query
+          schema:
+            type: integer
+          description: Number of seconds after which the presigned URL expires. When provided, a presigned URL will be returned for the upload session.
+          required: false
       responses:
         '200':
           description: Successful response
@@ -6500,36 +8149,6 @@ paths:
                   message:
                     type: string
                     description: response message
-        '404':
-          description: no session found for uploadId
-          content:
-            application/json: {}
-        '500':
-          $ref: '#/components/responses/ServerError'
-  /uploads/{uploadId}/complete:
-    post:
-      tags:
-        - Uploads
-      summary: Notifies the server that all chunks have been uploaded and the file should be reassembled
-      parameters:
-        - name: uploadId
-          in: path
-          schema:
-            type: string
-          description: REST_Upload uuid
-          required: true
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/UploadCompletionRequest'
-      responses:
-        '200':
-          description: Successful response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UploadCompletionResponse'
         '404':
           description: no session found for uploadId
           content:
@@ -6614,3 +8233,78 @@ paths:
             application/json: {}
         '500':
           $ref: '#/components/responses/ServerError'
+  /batch:
+    post:
+      tags:
+         - Batch
+      summary: Execute batch request
+      parameters:
+        - name: transaction
+          in: query
+          schema:
+            type: boolean
+          description: if true, all requests are processed in a single transaction (default is true)
+          required: false
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchRequest'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchResponse'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Health monitoring
+      parameters:
+        - name: key
+          in: query
+          required: false
+          schema:
+            type: string
+          description: optional health monitoring key, required if configure at backend
+        - name: db
+          in: query
+          required: false
+          schema:
+            type: boolean
+          description: optional flag to enable/disable database connection check. default is false
+      responses:
+        '200':
+          description: UP response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: 
+                      - UP
+                  database:
+                    type: string
+                    enum: 
+                      - connected
+        '503':
+          description: DOWN response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: 
+                      - DOWN
+                  database:
+                    type: string
+                    enum: 
+                      - disconnected

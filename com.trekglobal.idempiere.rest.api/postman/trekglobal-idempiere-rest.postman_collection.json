@@ -1,10 +1,10 @@
 {
 	"info": {
-		"_postman_id": "ecf43157-e76e-4f57-a812-841a05427eff",
+		"_postman_id": "bc47a50e-32e6-48f5-8467-5fd3fdcd29bf",
 		"name": "trekglobal-idempiere-rest",
 		"description": "Import or create an environment with the variables: host, port, protocol, userName, password, clientId, roleId, organizationId, warehouseId, language, sysuserName and syspassword\n\nRun POST api/v1/auth/tokens to get the first authentication token.\n\nThen run PUT api/v1/auth/tokens to get the second authentication token.",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-		"_exporter_id": "8597989"
+		"_exporter_id": "7631578"
 	},
 	"item": [
 		{
@@ -272,6 +272,138 @@
 					]
 				},
 				"description": "Logout the session related to a token."
+			},
+			"response": []
+		},
+		{
+			"name": "api/v1/auth/password-reset/request",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					},
+					{
+						"key": "Accept",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"email\": \"{{resetEmail}}\",\n    \"language\": \"{{language}}\"\n}"
+				},
+				"url": {
+					"raw": "{{protocol}}://{{host}}:{{port}}/api/v1/auth/password-reset/request",
+					"protocol": "{{protocol}}",
+					"host": [
+						"{{host}}"
+					],
+					"port": "{{port}}",
+					"path": [
+						"api",
+						"v1",
+						"auth",
+						"password-reset",
+						"request"
+					]
+				},
+				"description": "Code-based password reset - step 1. Emails a one-time code. Response is neutral (never reveals whether the email is registered). No Authorization header."
+			},
+			"response": []
+		},
+		{
+			"name": "api/v1/auth/password-reset/verify",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"var jsonData = pm.response.json();",
+							"if (jsonData.verifiedToken) {",
+							"    pm.environment.set(\"resetVerifiedToken\", jsonData.verifiedToken);",
+							"}"
+						],
+						"type": "text/javascript",
+						"packages": {}
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					},
+					{
+						"key": "Accept",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"email\": \"{{resetEmail}}\",\n    \"code\": \"{{resetCode}}\"\n}"
+				},
+				"url": {
+					"raw": "{{protocol}}://{{host}}:{{port}}/api/v1/auth/password-reset/verify",
+					"protocol": "{{protocol}}",
+					"host": [
+						"{{host}}"
+					],
+					"port": "{{port}}",
+					"path": [
+						"api",
+						"v1",
+						"auth",
+						"password-reset",
+						"verify"
+					]
+				},
+				"description": "Code-based password reset - step 2. Verifies the emailed code and stores the returned verifiedToken in the resetVerifiedToken environment variable. No Authorization header."
+			},
+			"response": []
+		},
+		{
+			"name": "api/v1/auth/password-reset/complete",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					},
+					{
+						"key": "Accept",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"verifiedToken\": \"{{resetVerifiedToken}}\",\n    \"newPassword\": \"{{resetNewPassword}}\"\n}"
+				},
+				"url": {
+					"raw": "{{protocol}}://{{host}}:{{port}}/api/v1/auth/password-reset/complete",
+					"protocol": "{{protocol}}",
+					"host": [
+						"{{host}}"
+					],
+					"port": "{{port}}",
+					"path": [
+						"api",
+						"v1",
+						"auth",
+						"password-reset",
+						"complete"
+					]
+				},
+				"description": "Code-based password reset - step 3. Sets the new password using the verifiedToken from step 2. No Authorization header."
 			},
 			"response": []
 		},
@@ -1337,7 +1469,7 @@
 				],
 				"body": {
 					"mode": "raw",
-					"raw": "{\n    \"Name\": \"Monroe\",\n     \"C_Location_ID\": {\n        \"id\": 125,  // if id = 0 a new C_Location is created an linked to the record\n        \"address1\": \"address 1\",\n        \"address2\": \"address 2\",\n        \"address3\": \"address 3\",\n        \"address4\": \"address 4\",\n        \"address5\": \"address 5\",\n        \"postal\": \"postal\",\n        \"postal_add\": \"add\",\n        \"c_country_id\": 100,\n        \"c_region_id\": 102,\n        \"regionname\": \"RN\",\n        \"c_city_id\": 0,\n        \"city\": \"Near Village\",\n        \"comments\": \"comments\",\n        \"isactive\": true\n    }\n}"
+					"raw": "{\n    \"Name\": \"Monroe\",\n     \"C_Location_ID\": {\n        \"id\": 125,  // if id = 0 a new C_Location is created an linked to the record\n        \"address1\": \"address 1\",\n        \"address2\": \"address 2\",\n        \"address3\": \"address 3\",\n        \"address4\": \"address 4\",\n        \"address5\": \"address 5\",\n        \"postal\": \"postal\",\n        \"Postal_Add\": \"add\",\n        \"C_Country_ID\": 100,\n        \"C_Region_ID\": 102,\n        \"RegionName\": \"RN\",\n        \"C_City_ID\": 0,\n        \"city\": \"Near Village\",\n        \"comments\": \"comments\",\n        \"IsActive\": true\n    }\n}"
 				},
 				"url": {
 					"raw": "{{protocol}}://{{host}}:{{port}}/api/v1/models/c_bpartner_location/117",
@@ -1700,7 +1832,7 @@
 					}
 				],
 				"url": {
-					"raw": "{{protocol}}://{{host}}:{{port}}/api/v1/windows?$filter=name eq 'Bank / Cash'",
+					"raw": "{{protocol}}://{{host}}:{{port}}/api/v1/windows?$filter=name eq 'Bank/Cash'",
 					"protocol": "{{protocol}}",
 					"host": [
 						"{{host}}"
@@ -1714,7 +1846,7 @@
 					"query": [
 						{
 							"key": "$filter",
-							"value": "name eq 'Bank / Cash'"
+							"value": "name eq 'Bank/Cash'"
 						}
 					]
 				},
@@ -2149,6 +2281,55 @@
 					]
 				},
 				"description": "Example to create and complete a sales order document."
+			},
+			"response": []
+		},
+		{
+			"name": "api/v1/windows/sales-order dry run",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					},
+					{
+						"key": "Accept",
+						"value": "application/json",
+						"type": "text"
+					},
+					{
+						"key": "Authorization",
+						"value": "Bearer {{authToken}}",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n\t\"isSOTrx\": true,\n\t\"C_DocTypeTarget_ID\": { \"identifier\": \"Standard Order\" },\n\t\"C_BPartner_ID\" : { \"identifier\": \"C&W Construction\" }\n}"
+				},
+				"url": {
+					"raw": "{{protocol}}://{{host}}:{{port}}/api/v1/windows/sales-order",
+					"protocol": "{{protocol}}",
+					"host": [
+						"{{host}}"
+					],
+					"port": "{{port}}",
+					"path": [
+						"api",
+						"v1",
+						"windows",
+						"sales-order"
+					],
+					"query": [
+						{
+							"key": "$save",
+							"value": "false"
+						}
+					]
+				},
+				"description": "Example to post sales order without saving to DB."
 			},
 			"response": []
 		},
@@ -2678,6 +2859,137 @@
 					]
 				},
 				"description": "Get attachment by file name"
+			},
+			"response": []
+		},
+		{
+			"name": "api/v1/models/{table name}/{id}/archives",
+			"request": {
+				"method": "GET",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					},
+					{
+						"key": "Accept",
+						"value": "application/json",
+						"type": "text"
+					},
+					{
+						"key": "Authorization",
+						"value": "Bearer {{authToken}}",
+						"type": "text"
+					}
+				],
+				"url": {
+					"raw": "{{protocol}}://{{host}}:{{port}}/api/v1/models/c_invoice/1000045/archives",
+					"protocol": "{{protocol}}",
+					"host": [
+						"{{host}}"
+					],
+					"port": "{{port}}",
+					"path": [
+						"api",
+						"v1",
+						"models",
+						"c_invoice",
+						"1000045",
+						"archives"
+					]
+				},
+				"description": "Get the list of archives (e.g. previously printed report PDFs) of a record, most recent first"
+			},
+			"response": []
+		},
+		{
+			"name": "api/v1/models/{table name}/{id}/archives/{archive id}",
+			"request": {
+				"method": "GET",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					},
+					{
+						"key": "Accept",
+						"value": "application/octet-stream",
+						"type": "text"
+					},
+					{
+						"key": "Authorization",
+						"value": "Bearer {{authToken}}",
+						"type": "text"
+					}
+				],
+				"url": {
+					"raw": "{{protocol}}://{{host}}:{{port}}/api/v1/models/c_invoice/1000045/archives/1000123",
+					"protocol": "{{protocol}}",
+					"host": [
+						"{{host}}"
+					],
+					"port": "{{port}}",
+					"path": [
+						"api",
+						"v1",
+						"models",
+						"c_invoice",
+						"1000045",
+						"archives",
+						"1000123"
+					]
+				},
+				"description": "Get the binary content of a single archive entry by AD_Archive_ID"
+			},
+			"response": []
+		},
+		{
+			"name": "api/v1/models/{table name}/{id}/archives/{archive id}?json",
+			"request": {
+				"method": "GET",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					},
+					{
+						"key": "Accept",
+						"value": "application/json",
+						"type": "text"
+					},
+					{
+						"key": "Authorization",
+						"value": "Bearer {{authToken}}",
+						"type": "text"
+					}
+				],
+				"url": {
+					"raw": "{{protocol}}://{{host}}:{{port}}/api/v1/models/c_invoice/1000045/archives/1000123?json=true",
+					"protocol": "{{protocol}}",
+					"host": [
+						"{{host}}"
+					],
+					"port": "{{port}}",
+					"path": [
+						"api",
+						"v1",
+						"models",
+						"c_invoice",
+						"1000045",
+						"archives",
+						"1000123"
+					],
+					"query": [
+						{
+							"key": "json",
+							"value": "true"
+						}
+					]
+				},
+				"description": "Get a single archive entry as base64 encoded JSON (json query param)"
 			},
 			"response": []
 		},
@@ -4992,7 +5304,7 @@
 				],
 				"body": {
 					"mode": "raw",
-					"raw": "{\r\n    \"fileName\": \"emoji_wallpaper.png\",\r\n    \"contentType\": \"image/png\",\r\n    \"fileSize\" : 292287,\r\n    \"chunkSize\" : 146144,\r\n    \"sha256\": \"0bfbc699c443b29ed58de31d29a0a989d7ea68f07e787c415157332c4bfaf427\"\r\n}\r\n"
+					"raw": "{\r\n    \"fileName\": \"emoji_wallpaper.png\",\r\n    \"contentType\": \"image/png\",\r\n    \"fileSize\" : 292287,\r\n    \"chunkSize\" : 146144,\r\n    \"sha256\": \"0bfbc699c443b29ed58de31d29a0a989d7ea68f07e787c415157332c4bfaf427\",\r\n    \"uploadLocation\": \"ARCHIVE\",\r\n    \"expiresInSeconds\": 3600\r\n}\r\n"
 				},
 				"url": {
 					"raw": "{{protocol}}://{{host}}:{{port}}/api/v1/uploads",
@@ -5053,7 +5365,7 @@
 					"raw": ""
 				},
 				"url": {
-					"raw": "{{protocol}}://{{host}}:{{port}}/api/v1/uploads/{{uploadId}}",
+					"raw": "{{protocol}}://{{host}}:{{port}}/api/v1/uploads/{{uploadId}}?expiresInSeconds=3600",
 					"protocol": "{{protocol}}",
 					"host": [
 						"{{host}}"
@@ -5064,6 +5376,12 @@
 						"v1",
 						"uploads",
 						"{{uploadId}}"
+					],
+					"query": [
+						{
+							"key": "expiresInSeconds",
+							"value": "3600"
+						}
 					]
 				}
 			},
@@ -5106,6 +5424,11 @@
 					{
 						"key": "X-Content-SHA256",
 						"value": "6917746089c7a660e470671cea53dc04b4c27027882fa744822eaab686a55405",
+						"type": "text"
+					},
+					{
+						"key": "X-Total-Chunks",
+						"value": "2",
 						"type": "text"
 					}
 				],
@@ -5172,6 +5495,11 @@
 						"key": "X-Content-SHA256",
 						"value": "26d146bf4946a9f9bf6f7fc46dbfd60ad6b01fa16f5ef7d5cb982b9235d8edba",
 						"type": "text"
+					},
+					{
+						"key": "X-Total-Chunks",
+						"value": "2",
+						"type": "text"
 					}
 				],
 				"body": {
@@ -5194,63 +5522,6 @@
 						"{{uploadId}}",
 						"chunks",
 						"2"
-					]
-				}
-			},
-			"response": []
-		},
-		{
-			"name": "/api/v1/uploads/{{uploadId}}/complete",
-			"event": [
-				{
-					"listen": "test",
-					"script": {
-						"exec": [
-							"pm.test(\"Status code is 202\", function () {\r",
-							"    pm.response.to.have.status(202);\r",
-							"});"
-						],
-						"type": "text/javascript",
-						"packages": {}
-					}
-				}
-			],
-			"request": {
-				"method": "POST",
-				"header": [
-					{
-						"key": "Content-Type",
-						"value": "application/json",
-						"type": "text"
-					},
-					{
-						"key": "Accept",
-						"value": "application/json",
-						"type": "text"
-					},
-					{
-						"key": "Authorization",
-						"value": "Bearer {{authToken}}",
-						"type": "text"
-					}
-				],
-				"body": {
-					"mode": "raw",
-					"raw": "{\r\n    \"fileName\": \"\",\r\n    \"totalChunks\": 2,\r\n    \"uploadLocation\": \"\"\r\n}\r\n"
-				},
-				"url": {
-					"raw": "{{protocol}}://{{host}}:{{port}}/api/v1/uploads/{{uploadId}}/complete",
-					"protocol": "{{protocol}}",
-					"host": [
-						"{{host}}"
-					],
-					"port": "{{port}}",
-					"path": [
-						"api",
-						"v1",
-						"uploads",
-						"{{uploadId}}",
-						"complete"
 					]
 				}
 			},
@@ -5484,7 +5755,274 @@
 				}
 			},
 			"response": []
-		}
+		},
+		{
+			"name": "/api/v1/batch single transaction",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Accept",
+						"value": "application/json",
+						"type": "text"
+					},
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					},
+					{
+						"key": "Authorization",
+						"value": "Bearer {{authToken}}",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "[\n    {\n        \"method\": \"POST\",\n        \"path\": \"v1/models/C_BPartner\",\n        \"body\": {\n            \"name\":\"Test creating BP with User and Interest Area from REST\",\n            \"AD_User\": [\n                {\n                    \"Name\":\"Test User with Interest area\",\n                    \"R_ContactInterest\": [\n                        {\n                            \"R_InterestArea_ID\":101\n                        }\n                    ]\n                }\n            ]\n        }\n    },\n    {\n        \"method\": \"PUT\",\n        \"path\": \"v1/models/C_BPartner/117\",\n        \"body\": {\n            \"description\": \"Test batch update {{$isoTimestamp}}\"\n        }\n    }\n]",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{protocol}}://{{host}}:{{port}}/api/v1/batch?transaction=true",
+					"protocol": "{{protocol}}",
+					"host": [
+						"{{host}}"
+					],
+					"port": "{{port}}",
+					"path": [
+						"api",
+						"v1",
+						"batch"
+					],
+					"query": [
+						{
+							"key": "transaction",
+							"value": "true",
+							"description": "if true, all requests are processed in a single transaction (default is true)"
+						}
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "/api/v1/batch transaction per request",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Accept",
+						"value": "application/json",
+						"type": "text"
+					},
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					},
+					{
+						"key": "Authorization",
+						"value": "Bearer {{authToken}}",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "[\n    {\n        \"method\": \"PUT\",\n        \"path\": \"v1/models/C_BPartner/117\",\n        \"body\": {\n            \"description\": \"Test batch update {{$isoTimestamp}}\"\n        }\n    },\n    {\n        \"method\": \"POST\",\n        \"path\": \"v1/models/C_BPartner\",\n        \"body\": {\n            \"name\":\"Test creating BP with User and Interest Area from REST\",\n            \"AD_User\": [\n                {\n                    \"Name\":\"Test User with Interest area\",\n                    \"R_ContactInterest\": [\n                        {\n                            \"R_InterestArea_ID\":10000000\n                        }\n                    ]\n                }\n            ]\n        }\n    }\n]",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{protocol}}://{{host}}:{{port}}/api/v1/batch?transaction=false",
+					"protocol": "{{protocol}}",
+					"host": [
+						"{{host}}"
+					],
+					"port": "{{port}}",
+					"path": [
+						"api",
+						"v1",
+						"batch"
+					],
+					"query": [
+						{
+							"key": "transaction",
+							"value": "false",
+							"description": "if true, all requests are processed in a single transaction (default is true)"
+						}
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "api/v1/health",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{protocol}}://{{host}}:{{port}}/api/v1/health?key={{healthMonitoringKey}}&db={{dbStatusCheck}}",
+					"protocol": "{{protocol}}",
+					"host": [
+						"{{host}}"
+					],
+					"port": "{{port}}",
+					"path": [
+						"api",
+						"v1",
+						"health"
+					],
+					"query": [
+						{
+							"key": "key",
+							"value": "{{healthMonitoringKey}}"
+						},
+						{
+							"key": "db",
+							"value": "{{dbStatusCheck}}"
+						}
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "api/v1/health",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{protocol}}://{{host}}:{{port}}/api/v1/health?key={{healthMonitoringKey}}&db={{dbStatusCheck}}",
+					"protocol": "{{protocol}}",
+					"host": [
+						"{{host}}"
+					],
+					"port": "{{port}}",
+					"path": [
+						"api",
+						"v1",
+						"health"
+					],
+					"query": [
+						{
+							"key": "key",
+							"value": "{{healthMonitoringKey}}"
+						},
+						{
+							"key": "db",
+							"value": "{{dbStatusCheck}}"
+						}
+					]
+				}
+			},
+			"response": []
+		},
+		{
+		  "name": "api/v1/models/{table name} - timestamp eq filter",
+		  "request": {
+			"method": "GET",
+			"header": [
+			  {
+				"key": "Content-Type",
+				"value": "application/json",
+				"type": "text"
+			  },
+			  {
+				"key": "Accept",
+				"value": "application/json",
+				"type": "text"
+			  },
+			  {
+				"key": "Authorization",
+				"value": "Bearer {{authToken}}",
+				"type": "text"
+			  }
+			],
+			"url": {
+			  "raw": "{{protocol}}://{{host}}:{{port}}/api/v1/models/c_tax?$filter=created eq '2003-01-08T15:06:11'&$select=name,created",
+			  "protocol": "{{protocol}}",
+			  "host": [
+				"{{host}}"
+			  ],
+			  "port": "{{port}}",
+			  "path": [
+				"api",
+				"v1",
+				"models",
+				"c_tax"
+			  ],
+			  "query": [
+				{
+				  "key": "$filter",
+				  "value": "created eq '2003-01-08T15:06:11'"
+				},
+				{
+				  "key": "$select",
+				  "value": "name,created",
+				  "type": "text"
+				}
+			  ]
+			},
+			"description": "Get records for table with optional filter, orderBy and pageNo parameter. Default page size is 100."
+		  },
+		  "response": []
+		},
+		{
+		  "name": "api/v1/models/{table name} - timestamp range filter",
+		  "request": {
+			"method": "GET",
+			"header": [
+			  {
+				"key": "Content-Type",
+				"value": "application/json",
+				"type": "text"
+			  },
+			  {
+				"key": "Accept",
+				"value": "application/json",
+				"type": "text"
+			  },
+			  {
+				"key": "Authorization",
+				"value": "Bearer {{authToken}}",
+				"type": "text"
+			  }
+			],
+			"url": {
+			  "raw": "{{protocol}}://{{host}}:{{port}}/api/v1/models/c_tax?$filter=created ge '2003-01-08T01:06:11Z' and created lt '2003-01-09T23:20:21Z'&$select=name,created",
+			  "protocol": "{{protocol}}",
+			  "host": [
+				"{{host}}"
+			  ],
+			  "port": "{{port}}",
+			  "path": [
+				"api",
+				"v1",
+				"models",
+				"c_tax"
+			  ],
+			  "query": [
+				{
+				  "key": "$filter",
+				  "value": "created ge '2003-01-08T01:06:11Z' and created lt '2003-01-09T23:20:21Z'"
+				},
+				{
+				  "key": "$select",
+				  "value": "name,created"
+				}
+			  ]
+			},
+			"description": "Get records for table with optional filter, orderBy and pageNo parameter. Default page size is 100."
+		  },
+		  "response": []
+		}		
 	],
 	"event": [
 		{
